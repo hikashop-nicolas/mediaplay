@@ -727,7 +727,10 @@ class MediaPlayer implements MediaPlayerHandle {
               this.subUrls.push(url); // revoked on dispose alongside the VTT blobs
               libassFonts.push(url);
             }
-            info.subtitles.forEach((s, i) => addSubTrack({ label: s.label || s.language, lang: s.language, vtt: s.vtt, assDoc: s.assDoc }, i === 0));
+            // Embedded hosts (subtitle editor) drive subtitles themselves, so don't add
+            // or auto-select the file's own subtitle tracks; keep fonts and audio though.
+            if (!this.opts.embedded)
+              info.subtitles.forEach((s, i) => addSubTrack({ label: s.label || s.language, lang: s.language, vtt: s.vtt, assDoc: s.assDoc }, i === 0));
             audioTracks = info.audio;
             rebuildMenu();
             // Video plays but the audio codec has no browser decoder: the element stays
