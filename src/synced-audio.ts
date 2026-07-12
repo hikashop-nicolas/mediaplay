@@ -9,7 +9,7 @@
 
 import { Input, ALL_FORMATS, BufferSource, AudioBufferSink, type InputAudioTrack } from "mediabunny";
 import { setLibavBase, registerAc3Decoder, createDirectAudioDecoder, MKV_LIBAV_CODECS, type DirectFrame } from "./libav-decoder";
-import { readAudioPackets, type MkvInfo } from "./mkv";
+import { readAudioPackets, extractMkvInfo, type MkvInfo } from "./mkv";
 
 const LOOKAHEAD = 1.5; // seconds of audio to keep scheduled ahead (survives main-thread stalls)
 const LEAD_IN = 0.05; // small audio-clock headroom at anchor (also the residual A/V offset)
@@ -449,4 +449,86 @@ export async function playSyncedAudio(
     console.warn("[mediaplay:audio] playSyncedAudio failed:", e);
     return "undecodable";
   }
+}
+
+export interface WaveformPeaks {
+  peaks: Float32Array; // absolute-peak amplitude (0..1) per bucket
+  peaksPerSec: number;
+}
+
+/**
+ * Decode a file's audio track to a downsampled waveform (absolute-peak buckets), using
+ * the same codec routing as playback: mediabunny (with our libav decoder for AC-3/E-AC-3)
+ * for most codecs, and the direct Matroska reader for DTS/TrueHD/MLP. It streams the
+ * decoded PCM chunk by chunk and keeps only the peaks, so it works on codecs the browser
+ * can't decode and on large files without holding the whole PCM in memory.
+ */
+export async function extractWaveformPeaks(
+  bytes: Uint8Array,
+  opts: { base?: string; peaksPerSec?: number; audioIndex?: number; signal?: AbortSignal; onProgress?: (ratio: number) => void; durationHint?: number } = {},
+): Promise<WaveformPeaks | null> {
+  const peaksPerSec = opts.peaksPerSec ?? 100;
+  const base = opts.base ?? new URL("libav/", document.baseURI).toString();
+  const audioIndex = opts.audioIndex ?? 0;
+  setLibavBase(base);
+  registerAc3Decoder();
+
+  // Route Dolby/DTS Matroska tracks through the direct decoder like the player does.
+  let direct: DirectAudioInfo | undefined;
+  try {
+    const info = extractMkvInfo(bytes);
+    const audio = info.audio[audioIndex] ?? info.audio[0];
+    if (audio && MKV_LIBAV_CODECS[audio.codec.toUpperCase()]) {
+      direct = { mkvTrackNumber: audio.number, mkvCodec: audio.codec, info };
+    }
+  } catch {
+    /* not Matroska; fall through to mediabunny */
+  }
+
+  let source: AudioChunkSource;
+  const ffCodec = direct ? MKV_LIBAV_CODECS[direct.mkvCodec.toUpperCase()] : undefined;
+  if (direct && ffCodec && !/^A_E?AC3$/i.test(direct.mkvCodec)) {
+    if (!direct.info.clusters.length) return null;
+    source = mkvDirectSource(bytes, direct.mkvTrackNumber, ffCodec, base, direct.info);
+  } else {
+    const input = new Input({ source: new BufferSource(bytes), formats: ALL_FORMATS });
+    const tracks = await input.getTracks();
+    const track = tracks.filter((t) => t.isAudioTrack())[audioIndex] ?? tracks.filter((t) => t.isAudioTrack())[0];
+    if (!track) return null;
+    source = mediabunnySource(track);
+  }
+
+  const ctx = new AudioContext();
+  const STRIDE = 4; // sample stride for the peak scan (visual detail is fine)
+  const peaks: number[] = [];
+  try {
+    for await (const chunk of source.buffers(0, ctx)) {
+      if (opts.signal?.aborted) return null;
+      const { buffer, timestamp } = chunk;
+      const rate = buffer.sampleRate || 48000;
+      const nch = buffer.numberOfChannels;
+      const chans: Float32Array[] = [];
+      for (let c = 0; c < nch; c += 1) chans.push(buffer.getChannelData(c));
+      const len = buffer.length;
+      for (let i = 0; i < len; i += STRIDE) {
+        let a = 0;
+        for (const ch of chans) {
+          const x = Math.abs(ch[i]);
+          if (x > a) a = x;
+        }
+        const bucket = Math.floor((timestamp + i / rate) * peaksPerSec);
+        if (bucket >= 0 && (peaks[bucket] === undefined || a > peaks[bucket])) peaks[bucket] = a;
+      }
+      if (opts.onProgress && opts.durationHint) opts.onProgress(Math.min(1, timestamp / opts.durationHint));
+    }
+  } catch (e) {
+    console.warn("[mediaplay:audio] extractWaveformPeaks failed:", e);
+    if (!peaks.length) return null;
+  } finally {
+    void ctx.close();
+  }
+
+  const out = new Float32Array(peaks.length);
+  for (let i = 0; i < peaks.length; i += 1) out[i] = peaks[i] ?? 0;
+  return { peaks: out, peaksPerSec };
 }
