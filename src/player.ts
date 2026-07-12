@@ -627,18 +627,19 @@ class MediaPlayer implements MediaPlayerHandle {
           const entry = subTracks[liveIndex]!;
           entry.vtt = vtt;
           entry.assDoc = assDoc;
-          const live = octopus as { setTrack?: (s: string) => void } | null;
+          const live = octopus as { setTrack?: (s: string) => void; setCurrentTime?: (t: number) => void; lastRenderTime?: number } | null;
           if (assDoc && octopusFor === liveIndex && live?.setTrack) {
+            live.setTrack(assDoc);
             if (m.paused) {
-              // Paused: octopus won't repaint a same-time re-render and doesn't clear the
-              // canvas for an empty frame, so a cue edited off the current time lingers.
-              // Rebuild it: disposing the old canvas removes the stale frame, and the
-              // fresh instance renders the current frame (a moved-away cue -> nothing).
-              dropOctopus();
-              void startOctopus(liveIndex);
-            } else {
-              live.setTrack(assDoc); // playing: the render loop repaints on the next frame
+              // Paused: setTrack alone doesn't repaint, and octopus drops a render whose
+              // timestamp isn't greater than the last drawn frame's. Clear that guard and
+              // nudge the render time forward so octopus draws the new content at the
+              // current position, whether the cue moved off (renders empty -> the canvas
+              // is cleared first) or was repositioned / retexted (renders in the new spot).
+              if (typeof live.lastRenderTime === "number") live.lastRenderTime = -1;
+              live.setCurrentTime?.(m.currentTime + 0.001);
             }
+            // Playing: the render loop repaints on the next frame; setTrack is enough.
             return;
           }
           if (entry.el) {
