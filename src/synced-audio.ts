@@ -20,12 +20,15 @@ export interface SyncedAudioHandle {
 class SyncedAudio {
   private readonly ctx: AudioContext;
   private readonly sink: AudioBufferSink;
+  private readonly gain: GainNode; // master output (buffer sources -> gain -> analyser -> speakers)
+  private readonly analyser: AnalyserNode;
   private token = 0;
   private readonly active = new Set<AudioBufferSourceNode>();
   private disposed = false;
   private readonly listeners: [string, EventListener][] = [];
   private readonly cleanups: (() => void)[] = [];
   private restartTimer = 0;
+  private levelTimer = 0;
   private currentIter: ReturnType<AudioBufferSink["buffers"]> | null = null;
   private reseeks = 0;
 
@@ -34,6 +37,18 @@ class SyncedAudio {
     track: InputAudioTrack,
   ) {
     this.ctx = new AudioContext();
+    this.gain = this.ctx.createGain();
+    this.analyser = this.ctx.createAnalyser();
+    this.gain.connect(this.analyser);
+    this.analyser.connect(this.ctx.destination);
+    // Signal meter: report the actual output level so we can tell "flowing" from "silent".
+    const buf = new Float32Array(this.analyser.fftSize);
+    this.levelTimer = window.setInterval(() => {
+      this.analyser.getFloatTimeDomainData(buf);
+      let peak = 0;
+      for (const v of buf) peak = Math.max(peak, Math.abs(v));
+      console.info(`[mediaplay:audio] output level peak=${peak.toFixed(4)} (ctx=${this.ctx.state}, nodes=${this.active.size})`);
+    }, 2000);
     this.sink = new AudioBufferSink(track);
     const on = (ev: string, fn: EventListener) => {
       this.video.addEventListener(ev, fn);
@@ -166,7 +181,7 @@ class SyncedAudio {
         const node = this.ctx.createBufferSource();
         node.buffer = buffer;
         node.playbackRate.value = rate;
-        node.connect(this.ctx.destination);
+        node.connect(this.gain);
         node.onended = () => this.active.delete(node);
         try {
           node.start(when, offset);
@@ -188,6 +203,7 @@ class SyncedAudio {
     this.disposed = true;
     this.token++;
     window.clearTimeout(this.restartTimer);
+    window.clearInterval(this.levelTimer);
     void this.currentIter?.return();
     this.currentIter = null;
     this.stopActive();
