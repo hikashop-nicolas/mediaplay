@@ -25,6 +25,8 @@ class SyncedAudio {
   private disposed = false;
   private readonly listeners: [string, EventListener][] = [];
   private readonly cleanups: (() => void)[] = [];
+  private restartTimer = 0;
+  private currentIter: ReturnType<AudioBufferSink["buffers"]> | null = null;
 
   constructor(
     private readonly video: HTMLMediaElement,
@@ -73,10 +75,35 @@ class SyncedAudio {
     this.restart();
   }
 
+  /** Stop the current run and (debounced) start a fresh one at the live position. A
+   *  scrub fires many seek events; coalescing them avoids spinning up a decode pipeline
+   *  per event. */
   private restart(): void {
     if (this.disposed) return;
-    this.token++;
-    void this.run(this.token, this.video.currentTime);
+    this.token++; // invalidate the running loop immediately (stops scheduling)
+    this.stopActive();
+    window.clearTimeout(this.restartTimer);
+    this.restartTimer = window.setTimeout(() => void this.launch(), 120);
+  }
+
+  /** Single-flight decode: close the previous iterator (freeing its decoder in the libav
+   *  worker) before opening a new one, so decoders never pile up and OOM the worker. */
+  private async launch(): Promise<void> {
+    if (this.disposed) return;
+    const myToken = ++this.token;
+    const prev = this.currentIter;
+    this.currentIter = null;
+    if (prev) {
+      try {
+        await prev.return();
+      } catch {
+        /* iterator already finished */
+      }
+    }
+    if (myToken !== this.token || this.disposed) return; // superseded while closing
+    const iter = this.sink.buffers(this.video.currentTime);
+    this.currentIter = iter;
+    await this.run(myToken, iter);
   }
 
   private stopActive(): void {
@@ -91,33 +118,20 @@ class SyncedAudio {
     this.active.clear();
   }
 
-  private async run(token: number, fromTime: number): Promise<void> {
+  private async run(token: number, iter: ReturnType<AudioBufferSink["buffers"]>): Promise<void> {
     if (this.ctx.state === "suspended" && !this.video.paused) {
       try {
         await this.ctx.resume();
       } catch {
-        /* needs a user gesture; the next play will resume */
+        /* needs a user gesture; the next play/gesture will resume */
       }
     }
     let scheduled = 0;
     try {
-      for await (const { buffer, timestamp, duration } of this.sink.buffers(fromTime)) {
-        // If the decoder has fallen well behind the live clock (slow cold start, or the
-        // iterator began before the video advanced), re-seek to now rather than decoding
-        // through every stale buffer to catch up.
-        if (!this.video.paused && this.video.currentTime - timestamp > 1) {
-          this.token++;
-          void this.run(this.token, this.video.currentTime);
-          return;
-        }
+      for await (const { buffer, timestamp, duration } of iter) {
         // Backpressure: hold until the video clock is within LOOKAHEAD of this buffer
         // (or we've been superseded / paused).
-        let waited = false;
         while ((this.video.paused || timestamp > this.video.currentTime + LOOKAHEAD) && token === this.token && !this.disposed) {
-          if (!waited && scheduled === 0) {
-            console.info(`[mediaplay:audio] waiting to schedule: paused=${this.video.paused} vt=${this.video.currentTime.toFixed(2)} bufTs=${timestamp.toFixed(2)}`);
-            waited = true;
-          }
           await sleep(40);
         }
         if (token !== this.token || this.disposed) return;
@@ -144,7 +158,7 @@ class SyncedAudio {
           continue;
         }
         this.active.add(node);
-        if (++scheduled === 1) console.info(`[mediaplay:audio] scheduling audio (ctx=${this.ctx.state}, first buffer @${timestamp.toFixed(2)}s)`);
+        if (++scheduled === 1) console.info(`[mediaplay:audio] scheduling (ctx=${this.ctx.state}, @${timestamp.toFixed(2)}s)`);
       }
     } catch (e) {
       console.warn("[mediaplay:audio] scheduling stopped:", e);
@@ -154,6 +168,9 @@ class SyncedAudio {
   destroy(): void {
     this.disposed = true;
     this.token++;
+    window.clearTimeout(this.restartTimer);
+    void this.currentIter?.return();
+    this.currentIter = null;
     this.stopActive();
     for (const [ev, fn] of this.listeners) this.video.removeEventListener(ev, fn);
     this.listeners.length = 0;
