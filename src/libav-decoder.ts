@@ -25,7 +25,10 @@ function loadLibav(): Promise<any> {
   if (!libavPromise) {
     if (!libavBase) throw new Error("mediaplay: libav asset base not set");
     const url = new URL(LIBAV_LOADER, libavBase).href;
-    libavPromise = import(/* @vite-ignore */ url).then((factory: any) => factory.LibAV({ base: libavBase }));
+    // noworker: run the decoder on the calling thread. In worker mode every per-packet
+    // ff_decode_multi is a postMessage round-trip, which drags throughput below realtime;
+    // direct calls decode at ~80x realtime (measured), easily keeping ahead of playback.
+    libavPromise = import(/* @vite-ignore */ url).then((factory: any) => factory.LibAV({ base: libavBase, noworker: true }));
   }
   return libavPromise as Promise<any>;
 }
