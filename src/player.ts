@@ -217,7 +217,9 @@ class MediaPlayer implements MediaPlayerHandle {
       this.media = m;
       m.src = this.url;
       m.controls = true;
-      m.autoplay = true; // opening a file is the user's intent to play; policy-blocked = stays paused
+      // Standalone: opening a file is intent to play (policy-blocked = stays paused).
+      // Embedded (a subtitle editor): the host decides when to play, so don't autoplay.
+      m.autoplay = !this.opts.embedded;
       // Shortcut list goes to assistive tech only; a title tooltip here pops up on
       // every hover over the player, which gets old fast.
       wrap.setAttribute("aria-label", isAudio ? S.mediaKeysAudio : S.mediaKeys);
@@ -774,9 +776,11 @@ class MediaPlayer implements MediaPlayerHandle {
     const base = this.opts.libav?.base ?? new URL("libav/", document.baseURI).toString();
     // The native track is silent (undecodable) anyway; muting also lets it autoplay
     // (unmuted autoplay is policy-blocked, which left it paused and starved the audio
-    // scheduler, since audio only advances while the video clock runs).
+    // scheduler, since audio only advances while the video clock runs). The engine's
+    // first-gesture handler lifts this mute and resumes on the user's play. Embedded
+    // hosts drive playback, so don't force play there (it would autoplay in an editor).
     video.muted = true;
-    void video.play().catch(() => undefined);
+    if (!this.opts.embedded) void video.play().catch(() => undefined);
     try {
       const { playSyncedAudio } = await import("./synced-audio");
       const handle = await playSyncedAudio(video, this.bytes!, audioIndex, base, direct);

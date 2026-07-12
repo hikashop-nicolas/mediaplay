@@ -104,13 +104,20 @@ class SyncedAudio {
     // first gesture also lifts the autoplay force-mute on the video element (its native
     // track is silent anyway), after which muted/volume are honored natively.
     const tryResume = () => {
-      void this.ctx.resume();
-      if (!this.muteSynced && !this.disposed) {
+      if (this.disposed) return removeGesture();
+      if (!this.muteSynced) {
         this.muteSynced = true;
         this.video.muted = false;
         this.applyVolume();
       }
-      if (this.ctx.state === "running" || this.disposed) removeGesture();
+      // Prime the context inside this gesture so a later resume() (on play) is allowed,
+      // but if the video isn't playing yet keep it idle, so audio doesn't run ahead of a
+      // paused video (embedded hosts open paused). Stop listening only once it's running
+      // during playback.
+      void this.ctx.resume().then(() => {
+        if (this.video.paused && this.ctx.state === "running") return this.ctx.suspend();
+      });
+      if (this.ctx.state === "running" && !this.video.paused) removeGesture();
     };
     const gestures = ["pointerdown", "keydown", "touchstart"];
     const removeGesture = () => gestures.forEach((ev) => document.removeEventListener(ev, tryResume));
