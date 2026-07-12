@@ -54,8 +54,11 @@ class LibavAc3Decoder extends CustomAudioDecoder {
     this.ctx = ctx;
     this.pkt = pkt;
     this.frame = frame;
-    // Interleaved 32-bit float out -> AudioSample "f32", ready for Web Audio.
-    await this.libav.AVCodecContext_sample_fmt_s(ctx, this.libav.AV_SAMPLE_FMT_FLT);
+    // Do NOT force ctx.sample_fmt: decoders ignore it and output their native format
+    // (E-AC-3 = FLTP, planar), and overriding it made the copyout misread the planar
+    // frame as interleaved - yielding buffers whose second half was padding zeros
+    // (16ms sound + 16ms silence per frame, i.e. chopped audio). emit() handles both
+    // planar and interleaved frames as they come.
   }
 
   async decode(packet: EncodedPacket): Promise<void> {
@@ -70,9 +73,26 @@ class LibavAc3Decoder extends CustomAudioDecoder {
 
   private emit(frames: any[], packetTs: number | undefined): void {
     for (const f of frames) {
-      const channels = this.libav.ff_channels(f);
       const rate = f.sample_rate;
-      const nb = f.data.length / Math.max(1, channels);
+      // Planar frame (E-AC-3's native FLTP): f.data is an array of per-channel planes.
+      // Concatenate them (mediabunny's "f32-planar" expects planes back to back).
+      let data: Float32Array;
+      let format: "f32" | "f32-planar";
+      let channels: number;
+      let nb: number;
+      if (Array.isArray(f.data)) {
+        const planes = f.data as Float32Array[];
+        channels = planes.length;
+        nb = planes[0]!.length;
+        data = new Float32Array(nb * channels);
+        planes.forEach((p, i) => data.set(p, i * nb));
+        format = "f32-planar";
+      } else {
+        data = f.data as Float32Array;
+        channels = this.libav.ff_channels(f);
+        nb = data.length / Math.max(1, channels);
+        format = "f32";
+      }
       // Re-anchor the clock if the input jumps (seek) or on the first frame; otherwise
       // advance it by the decoded frame length so timestamps stay monotonic and gap-free.
       const expected = this.clockTs + this.clockSamples / rate;
@@ -83,7 +103,7 @@ class LibavAc3Decoder extends CustomAudioDecoder {
       }
       const ts = this.clockTs + this.clockSamples / rate;
       this.clockSamples += nb;
-      this.onSample(new AudioSample({ data: f.data, format: "f32", numberOfChannels: channels, sampleRate: rate, timestamp: ts }));
+      this.onSample(new AudioSample({ data, format, numberOfChannels: channels, sampleRate: rate, timestamp: ts }));
     }
   }
 

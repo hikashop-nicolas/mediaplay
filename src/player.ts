@@ -665,9 +665,6 @@ class MediaPlayer implements MediaPlayerHandle {
             // (libav) and play it in sync with the muted video; other codecs (DTS,
             // TrueHD) aren't in the decoder, so we just tell the user.
             const activeCodec = audioTracks[activeAudio]?.codec ?? "";
-            const probeMime = activeCodec ? AUDIO_PROBE[activeCodec.toUpperCase()] : undefined;
-            const canPlay = probeMime ? m.canPlayType(probeMime) : "n/a";
-            console.info(`[mediaplay:audio] codec=${activeCodec} probe=${probeMime ?? "-"} canPlayType=${JSON.stringify(canPlay)}`);
             if (activeCodec && browserLacksAudioCodec(activeCodec, m)) {
               if (/^A_E?AC3$/i.test(activeCodec)) void this.startDecodedAudio(m, activeAudio, showToast);
               else showToast(S.mediaAudioUnsupported);
@@ -704,11 +701,9 @@ class MediaPlayer implements MediaPlayerHandle {
     // scheduler, since audio only advances while the video clock runs).
     video.muted = true;
     void video.play().catch(() => undefined);
-    console.info(`[mediaplay:audio] decoding via libav; base=${base}; video.paused=${video.paused}`);
     try {
       const { playSyncedAudio } = await import("./synced-audio");
       const handle = await playSyncedAudio(video, this.bytes!, audioIndex, base);
-      console.info(`[mediaplay:audio] playSyncedAudio ->`, handle === "undecodable" ? "undecodable" : handle ? "playing" : "no track");
       if (!this.wrap) {
         if (handle && handle !== "undecodable") handle.destroy();
         return;

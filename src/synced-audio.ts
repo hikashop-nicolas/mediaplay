@@ -34,7 +34,6 @@ class SyncedAudio {
   private readonly cleanups: (() => void)[] = [];
   private restartTimer = 0;
   private pauseTimer = 0;
-  private levelTimer = 0;
   private currentIter: ReturnType<AudioBufferSink["buffers"]> | null = null;
   private reseeks = 0;
 
@@ -47,24 +46,13 @@ class SyncedAudio {
     this.analyser = this.ctx.createAnalyser();
     this.gain.connect(this.analyser);
     this.analyser.connect(this.ctx.destination);
-    // Signal meter: report the actual output level so we can tell "flowing" from "silent".
-    const buf = new Float32Array(this.analyser.fftSize);
-    this.levelTimer = window.setInterval(() => {
-      this.analyser.getFloatTimeDomainData(buf);
-      let peak = 0;
-      for (const v of buf) peak = Math.max(peak, Math.abs(v));
-      console.info(`[mediaplay:audio] output level peak=${peak.toFixed(4)} (ctx=${this.ctx.state}, nodes=${this.active.size})`);
-    }, 2000);
+    // Test hook: lets an instrumented page (demo/gaptest) attach an analyzer to the graph.
+    (globalThis as { __mediaplayDebugTap?: (ctx: AudioContext, gain: GainNode) => void }).__mediaplayDebugTap?.(this.ctx, this.gain);
     this.sink = new AudioBufferSink(track);
     const on = (ev: string, fn: EventListener) => {
       this.video.addEventListener(ev, fn);
       this.listeners.push([ev, fn]);
     };
-    // Raw video-event trace: shows whether the picture toggles because it is buffering
-    // (waiting/stalled, readyState dropping) or something drives play/pause in a loop.
-    for (const ev of ["play", "pause", "waiting", "stalled", "seeking", "seeked", "ratechange", "ended", "emptied", "suspend"]) {
-      on(ev, () => console.info(`[mediaplay:vid] ${ev} @${this.video.currentTime.toFixed(2)} ready=${this.video.readyState} net=${this.video.networkState}`));
-    }
     // Suspending the context on pause freezes scheduled audio in place, aligned with
     // the paused video; resuming continues both together.
     on("play", () => {
@@ -100,7 +88,6 @@ class SyncedAudio {
     const removeGesture = () => gestures.forEach((ev) => document.removeEventListener(ev, tryResume));
     gestures.forEach((ev) => document.addEventListener(ev, tryResume, { passive: true }));
     this.cleanups.push(removeGesture);
-    console.info(`[mediaplay:audio] AudioContext state=${this.ctx.state}, sampleRate=${this.ctx.sampleRate}`);
   }
 
   start(): void {
@@ -223,10 +210,7 @@ class SyncedAudio {
         }
         nextWhen += duration / rate;
         this.active.add(node);
-        if (++scheduled === 1) {
-          this.reseeks = 0;
-          console.info(`[mediaplay:audio] scheduling (ctx=${this.ctx.state}, @${timestamp.toFixed(2)}s, vt=${this.video.currentTime.toFixed(2)})`);
-        }
+        if (++scheduled === 1) this.reseeks = 0;
       }
     } catch (e) {
       console.warn("[mediaplay:audio] scheduling stopped:", e);
@@ -238,7 +222,6 @@ class SyncedAudio {
     this.token++;
     window.clearTimeout(this.restartTimer);
     window.clearTimeout(this.pauseTimer);
-    window.clearInterval(this.levelTimer);
     void this.currentIter?.return();
     this.currentIter = null;
     this.stopActive();
@@ -289,7 +272,6 @@ export async function playSyncedAudio(
     if (!track) return null;
     // A newer start may have happened while we awaited getTracks; it wins.
     stopCurrentEngine();
-    console.info(`[mediaplay:audio] track ${audioIndex} codec=${track.codec}; starting sync engine`);
     const engine = new SyncedAudio(video, track);
     currentEngine = engine;
     engine.start();

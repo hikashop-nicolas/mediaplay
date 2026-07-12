@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>mediaplay gap test</title>
+    <style>
+      html, body { margin: 0; background: #111; color: #eee; font: 13px monospace; }
+      video { width: 480px; display: block; }
+      #log { white-space: pre; padding: 8px; }
+    </style>
+  </head>
+  <body>
+    <video id="v" controls muted></video>
+    <div id="log">loading…</div>
+    <script type="module" src="./gaptest.ts"></script>
+  </body>
+</html>
