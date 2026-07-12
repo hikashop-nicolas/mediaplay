@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assFileToVtt, decodeSubtitleBytes, extractMkvInfo, extractMkvSubtitles, srtToVtt } from "./mkv";
+import { assFileToVtt, decodeSubtitleBytes, extractMkvInfo, extractMkvSubtitles, readAudioPackets, srtToVtt } from "./mkv";
 
 // Hand-built EBML fixtures: enough Matroska structure for the extractor
 // (EBML header, Segment > Info/Tracks/Cluster with subtitle blocks).
@@ -245,5 +245,81 @@ describe("embedded ASS document reconstruction", () => {
       mkv({ tracks: subtitleTrackEntry(1, "S_TEXT/UTF8"), clusters: el(0x1f43b675, [...el(0xe7, uintPayload(0)), ...el(0xa3, simpleBlock(1, 0, "x"))]) }),
     );
     expect(srtSubs[0]!.assDoc).toBeUndefined();
+  });
+});
+
+describe("readAudioPackets", () => {
+  const audioTrack = (num: number): number[] =>
+    el(0xae, [...el(0xd7, uintPayload(num)), ...el(0x83, [0x02]), ...el(0x86, Array.from(te.encode("A_DTS")))]);
+
+  const head = (track: number, relTime: number, flags: number): number[] => [0x80 | track, (relTime >> 8) & 0xff, relTime & 0xff, flags];
+
+  const xiphBlock = (track: number, relTime: number, frames: number[][]): number[] => {
+    const sizes: number[] = [];
+    for (let i = 0; i < frames.length - 1; i++) {
+      let s = frames[i]!.length;
+      while (s >= 255) {
+        sizes.push(255);
+        s -= 255;
+      }
+      sizes.push(s);
+    }
+    return [...head(track, relTime, 0x02), frames.length - 1, ...sizes, ...frames.flat()];
+  };
+  const fixedBlock = (track: number, relTime: number, frames: number[][]): number[] => [
+    ...head(track, relTime, 0x04),
+    frames.length - 1,
+    ...frames.flat(),
+  ];
+  const ebmlBlock = (track: number, relTime: number, frames: number[][]): number[] => {
+    // 1-byte vints: first size unsigned (0x80|n), then signed deltas (bias 63).
+    const out = [...head(track, relTime, 0x06), frames.length - 1, 0x80 | frames[0]!.length];
+    for (let i = 1; i < frames.length - 1; i++) out.push(0x80 | (frames[i]!.length - frames[i - 1]!.length + 63));
+    return [...out, ...frames.flat()];
+  };
+
+  const collect = (bytes: Uint8Array, track: number, fromMs: number) => {
+    const info = extractMkvInfo(bytes);
+    return Array.from(readAudioPackets(bytes, track, fromMs, info)).map((p) => ({ tsMs: p.tsMs, data: Array.from(p.data) }));
+  };
+
+  it("yields unlaced SimpleBlock frames with cluster+relative time", () => {
+    const cluster = el(0x1f43b675, [...el(0xe7, uintPayload(1000)), ...el(0xa3, [...head(2, 40, 0), 9, 8, 7])]);
+    const got = collect(mkv({ tracks: audioTrack(2), clusters: cluster }), 2, 0);
+    expect(got).toEqual([{ tsMs: 1040, data: [9, 8, 7] }]);
+  });
+
+  it("splits Xiph, EBML and fixed lacing into frames", () => {
+    const fx = [
+      [1, 2, 3],
+      [4, 5],
+      [6, 7, 8, 9],
+    ];
+    const fixedFx = [
+      [1, 2],
+      [3, 4],
+      [5, 6],
+    ];
+    const cluster = el(0x1f43b675, [
+      ...el(0xe7, uintPayload(0)),
+      ...el(0xa3, xiphBlock(2, 0, fx)),
+      ...el(0xa3, ebmlBlock(2, 10, fx)),
+      ...el(0xa3, fixedBlock(2, 20, fixedFx)),
+    ]);
+    const got = collect(mkv({ tracks: audioTrack(2), clusters: cluster }), 2, 0);
+    expect(got.map((g) => g.data)).toEqual([...fx, ...fx, ...fixedFx]);
+    expect(got.map((g) => g.tsMs)).toEqual([0, 0, 0, 10, 10, 10, 20, 20, 20]);
+  });
+
+  it("starts at the right cluster for a mid-file time and skips other tracks", () => {
+    const c1 = el(0x1f43b675, [...el(0xe7, uintPayload(0)), ...el(0xa3, [...head(2, 0, 0), 1]), ...el(0xa3, [...head(5, 0, 0), 99])]);
+    const c2 = el(0x1f43b675, [...el(0xe7, uintPayload(10000)), ...el(0xa3, [...head(2, 5, 0), 2])]);
+    const bytes = mkv({ tracks: audioTrack(2), clusters: [...c1, ...c2] });
+    const info = extractMkvInfo(bytes);
+    expect(info.clusters.length).toBe(2);
+    expect(info.timestampScale).toBe(1_000_000);
+    const got = Array.from(readAudioPackets(bytes, 2, 9000, info));
+    expect(got.map((p) => Array.from(p.data))).toEqual([[2]]);
+    expect(got[0]!.tsMs).toBe(10005);
   });
 });

@@ -1,4 +1,5 @@
-import { decodeSubtitleBytes, extractMkvInfo, subtitleFileToVtt, type MkvAudioTrack } from "./mkv";
+import { decodeSubtitleBytes, extractMkvInfo, subtitleFileToVtt, type MkvAudioTrack, type MkvInfo } from "./mkv";
+import type { DirectAudioInfo } from "./synced-audio";
 import { strings, type MediaStrings } from "./i18n";
 import type { SyncedAudioHandle } from "./synced-audio";
 
@@ -398,6 +399,12 @@ class MediaPlayer implements MediaPlayerHandle {
         let activeSub = -1;
         let lastSub = 0;
         let audioTracks: MkvAudioTrack[] = [];
+        let mkvInfo: MkvInfo | null = null;
+        // Routing info for the DTS/TrueHD direct-decode path (Matroska only).
+        const directFor = (i: number): DirectAudioInfo | undefined => {
+          const t = audioTracks[i];
+          return t && mkvInfo ? { mkvTrackNumber: t.number, mkvCodec: t.codec, info: mkvInfo } : undefined;
+        };
         let activeAudio = 0;
         // Fonts handed to libass so styled subs use the intended faces (fonts embedded in
         // the file + any the host supplied); populated once track info is parsed, below.
@@ -595,7 +602,7 @@ class MediaPlayer implements MediaPlayerHandle {
             this.decodedAudio.destroy();
             this.decodedAudio = null;
             rebuildMenu();
-            await this.startDecodedAudio(m, i, showToast);
+            await this.startDecodedAudio(m, i, showToast, directFor(i));
             return;
           }
           const note = document.createElement("div");
@@ -663,6 +670,7 @@ class MediaPlayer implements MediaPlayerHandle {
           if (!this.wrap) return;
           try {
             const info = extractMkvInfo(source.bytes);
+            mkvInfo = info;
             // Hand the file's embedded fonts to libass BEFORE selecting a track, so the
             // first styled render already resolves the intended (incl. CJK) faces.
             for (const f of info.fonts) {
@@ -679,7 +687,7 @@ class MediaPlayer implements MediaPlayerHandle {
             // TrueHD) aren't in the decoder, so we just tell the user.
             const activeCodec = audioTracks[activeAudio]?.codec ?? "";
             if (activeCodec && browserLacksAudioCodec(activeCodec, m)) {
-              if (/^A_E?AC3$/i.test(activeCodec)) void this.startDecodedAudio(m, activeAudio, showToast);
+              if (/^A_(E?AC3|DTS|TRUEHD|MLP)$/i.test(activeCodec)) void this.startDecodedAudio(m, activeAudio, showToast, directFor(activeAudio));
               else showToast(S.mediaAudioUnsupported);
             }
           } catch {
@@ -707,7 +715,7 @@ class MediaPlayer implements MediaPlayerHandle {
   }
 
   /** Decode an AC-3/E-AC-3 track with libav and play it in sync with the muted video. */
-  private async startDecodedAudio(video: HTMLMediaElement, audioIndex: number, showToast: (text: string) => void): Promise<void> {
+  private async startDecodedAudio(video: HTMLMediaElement, audioIndex: number, showToast: (text: string) => void, direct?: DirectAudioInfo): Promise<void> {
     const base = this.opts.libav?.base ?? new URL("libav/", document.baseURI).toString();
     // The native track is silent (undecodable) anyway; muting also lets it autoplay
     // (unmuted autoplay is policy-blocked, which left it paused and starved the audio
@@ -716,7 +724,7 @@ class MediaPlayer implements MediaPlayerHandle {
     void video.play().catch(() => undefined);
     try {
       const { playSyncedAudio } = await import("./synced-audio");
-      const handle = await playSyncedAudio(video, this.bytes!, audioIndex, base);
+      const handle = await playSyncedAudio(video, this.bytes!, audioIndex, base, direct);
       if (!this.wrap) {
         if (handle && handle !== "undecodable") handle.destroy();
         return;

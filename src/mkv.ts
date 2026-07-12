@@ -29,10 +29,27 @@ export interface MkvFont {
   data: Uint8Array;
 }
 
+/** Byte offset + start time of a Cluster; lets a packet reader seek without an index. */
+export interface MkvClusterRef {
+  offset: number;
+  timeMs: number;
+}
+
 export interface MkvInfo {
   subtitles: MkvSubtitleTrack[];
   audio: MkvAudioTrack[];
   fonts: MkvFont[];
+  /** Cluster index built during the scan, for readAudioPackets seeking. */
+  clusters: MkvClusterRef[];
+  /** TimestampScale (ns per tick), needed to interpret cluster/block times. */
+  timestampScale: number;
+}
+
+/** One encoded audio frame from a Matroska block (a zero-copy view into the file bytes). */
+export interface MkvAudioPacket {
+  /** Block presentation time, ms. Laced frames within a block share the block's time. */
+  tsMs: number;
+  data: Uint8Array;
 }
 
 // Element IDs (including their length-marker bits, as stored in the file).
@@ -131,6 +148,17 @@ class Reader {
       this.pos = save;
       return null;
     }
+  }
+  /** EBML SIGNED vint (EBML-lacing size deltas): unsigned vint minus the length bias. */
+  readSignedVint(): number | null {
+    const first = this.b[this.pos]!;
+    let len = 1;
+    for (let mask = 0x80; mask && !(first & mask); mask >>= 1) len++;
+    if (len > 8 || this.pos + len > this.b.length) return null;
+    let v = first & (0xff >> len);
+    for (let i = 1; i < len; i++) v = v * 256 + this.b[this.pos + i]!;
+    this.pos += len;
+    return v - (2 ** (7 * len - 1) - 1);
   }
 }
 
@@ -254,12 +282,13 @@ export function subtitleFileToVtt(name: string, bytes: Uint8Array): string {
 }
 
 export function extractMkvInfo(bytes: Uint8Array): MkvInfo {
-  const empty: MkvInfo = { subtitles: [], audio: [], fonts: [] };
+  const empty: MkvInfo = { subtitles: [], audio: [], fonts: [], clusters: [], timestampScale: 1_000_000 };
   if (bytes.length < 8 || bytes[0] !== 0x1a || bytes[1] !== 0x45 || bytes[2] !== 0xdf || bytes[3] !== 0xa3) return empty;
   const r = new Reader(bytes);
   const tracks = new Map<number, TrackInfo>();
   const audio: MkvAudioTrack[] = [];
   const fonts: MkvFont[] = [];
+  const clusters: MkvClusterRef[] = [];
   let scale = 1_000_000; // ns per tick (default = 1 ms)
 
   const parseAttachments = (end: number): void => {
@@ -337,8 +366,9 @@ export function extractMkvInfo(bytes: Uint8Array): MkvInfo {
     else if (type === 0x02) audio.push({ number: num, label: name, language: lang || "und", codec });
   };
 
-  const parseCluster = (end: number | null): void => {
+  const parseCluster = (end: number | null, selfOffset: number): void => {
     let clusterTs = 0;
+    let indexed = false;
     while (r.pos < (end ?? r.length)) {
       if (end == null) {
         const next = r.peekId();
@@ -350,6 +380,10 @@ export function extractMkvInfo(bytes: Uint8Array): MkvInfo {
       if (id === ID_CLUSTER_TIMESTAMP) {
         clusterTs = r.uint(size);
         r.pos += size;
+        if (!indexed) {
+          indexed = true;
+          clusters.push({ offset: selfOffset, timeMs: (clusterTs * scale) / 1e6 });
+        }
       } else if (id === ID_SIMPLE_BLOCK) {
         parseBlock(size, clusterTs, null);
       } else if (id === ID_BLOCK_GROUP) {
@@ -389,6 +423,7 @@ export function extractMkvInfo(bytes: Uint8Array): MkvInfo {
       } else if (id === ID_SEGMENT) {
         const segEnd = size == null ? r.length : Math.min(r.pos + size, r.length);
         while (r.pos < segEnd) {
+          const clStart = r.pos;
           const cid = r.readId();
           const csize = r.readSize();
           if (cid === ID_INFO && csize != null) {
@@ -412,11 +447,11 @@ export function extractMkvInfo(bytes: Uint8Array): MkvInfo {
           } else if (cid === ID_ATTACHMENTS && csize != null) {
             parseAttachments(r.pos + csize);
           } else if (cid === ID_CLUSTER) {
-            parseCluster(csize == null ? null : r.pos + csize);
+            parseCluster(csize == null ? null : r.pos + csize, clStart);
           } else if (csize != null) {
             r.pos += csize;
           } else {
-            return { subtitles: finish(tracks), audio, fonts }; // unknown-size non-cluster: bail with what we have
+            return { subtitles: finish(tracks), audio, fonts, clusters, timestampScale: scale }; // unknown-size non-cluster: bail with what we have
           }
         }
       } else if (size != null) {
@@ -428,7 +463,7 @@ export function extractMkvInfo(bytes: Uint8Array): MkvInfo {
   } catch {
     // Truncated or malformed tail: keep whatever cues were collected.
   }
-  return { subtitles: finish(tracks), audio, fonts };
+  return { subtitles: finish(tracks), audio, fonts, clusters, timestampScale: scale };
 }
 
 function finish(tracks: Map<number, TrackInfo>): MkvSubtitleTrack[] {
@@ -475,4 +510,139 @@ function buildAssDoc(t: TrackInfo): string | undefined {
     return `Dialogue: ${layer},${assTime(ev.start)},${assTime(ev.end)},${rest}`;
   });
   return header + "\n" + lines.join("\n") + "\n";
+}
+
+// --- encoded audio packet extraction (for the libav direct-decode path) ----------
+
+/** Parse a Block/SimpleBlock payload into its frame byte-ranges, lacing-aware
+ *  (audio blocks are commonly laced: Xiph, EBML or fixed). */
+function parseBlockFrames(bytes: Uint8Array, start: number, size: number): { track: number; relTime: number; frames: [number, number][] } | null {
+  const r = new Reader(bytes);
+  r.pos = start;
+  const track = r.readSize(); // block track number is a plain EBML varint
+  if (track == null) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset);
+  const relTime = view.getInt16(r.pos);
+  const flags = bytes[r.pos + 2]!;
+  r.pos += 3;
+  const end = start + size;
+  const lacing = flags & 0x06;
+  const frames: [number, number][] = [];
+  if (!lacing) {
+    if (end > r.pos) frames.push([r.pos, end - r.pos]);
+    return { track, relTime, frames };
+  }
+  const count = bytes[r.pos]! + 1;
+  r.pos += 1;
+  const sizes: number[] = [];
+  if (lacing === 0x04) {
+    // Fixed-size lacing: equal split of the remaining payload.
+    const each = Math.floor((end - r.pos) / count);
+    for (let i = 0; i < count; i++) sizes.push(each);
+  } else if (lacing === 0x02) {
+    // Xiph lacing: 255-run sums for the first count-1 frames.
+    for (let i = 0; i < count - 1; i++) {
+      let s = 0;
+      let v = 255;
+      while (v === 255) {
+        v = bytes[r.pos]!;
+        r.pos += 1;
+        s += v;
+      }
+      sizes.push(s);
+    }
+  } else {
+    // EBML lacing: first size an unsigned vint, then signed-vint deltas.
+    let prev = r.readSize();
+    if (prev == null) return null;
+    sizes.push(prev);
+    for (let i = 1; i < count - 1; i++) {
+      const delta = r.readSignedVint();
+      if (delta == null) return null;
+      prev += delta;
+      sizes.push(prev);
+    }
+  }
+  let off = r.pos;
+  for (const s of sizes) {
+    frames.push([off, s]);
+    off += s;
+  }
+  if (lacing !== 0x04 && end > off) frames.push([off, end - off]); // last frame = remainder
+  return { track, relTime, frames };
+}
+
+/**
+ * Iterate the encoded audio frames of one track, starting at the cluster covering
+ * `fromMs` (via the cluster index collected by extractMkvInfo). Yields zero-copy
+ * subarray views with the containing block's timestamp; a decoder's sample clock is
+ * expected to smooth per-frame times within a laced block.
+ */
+export function* readAudioPackets(bytes: Uint8Array, trackNumber: number, fromMs: number, info: MkvInfo): Generator<MkvAudioPacket> {
+  if (!info.clusters.length) return;
+  let start = info.clusters[0]!.offset;
+  for (const c of info.clusters) {
+    if (c.timeMs <= fromMs) start = c.offset;
+    else break;
+  }
+  const r = new Reader(bytes);
+  r.pos = start;
+  try {
+    while (r.pos < r.length) {
+      const id = r.readId();
+      const size = r.readSize();
+      if (id !== ID_CLUSTER) {
+        if (size == null) return;
+        r.pos += size;
+        continue;
+      }
+      const end = size == null ? null : r.pos + size;
+      let clusterTs = 0;
+      while (r.pos < (end ?? r.length)) {
+        if (end == null) {
+          const next = r.peekId();
+          if (next == null || SEGMENT_CHILDREN.has(next)) break; // unknown-size cluster ended
+        }
+        const cid = r.readId();
+        const csize = r.readSize();
+        if (csize == null) throw new Error("bad cluster child");
+        let bStart = -1;
+        let bSize = 0;
+        if (cid === ID_CLUSTER_TIMESTAMP) {
+          clusterTs = r.uint(csize);
+          r.pos += csize;
+          continue;
+        } else if (cid === ID_SIMPLE_BLOCK) {
+          bStart = r.pos;
+          bSize = csize;
+          r.pos += csize;
+        } else if (cid === ID_BLOCK_GROUP) {
+          const gEnd = r.pos + csize;
+          while (r.pos < gEnd) {
+            const gid = r.readId();
+            const gsize = r.readSize();
+            if (gsize == null) throw new Error("bad block group");
+            if (gid === ID_BLOCK) {
+              bStart = r.pos;
+              bSize = gsize;
+            }
+            r.pos += gsize;
+          }
+        } else {
+          r.pos += csize;
+          continue;
+        }
+        if (bStart < 0) continue;
+        const blk = parseBlockFrames(bytes, bStart, bSize);
+        if (!blk || blk.track !== trackNumber) continue;
+        const tsMs = ((clusterTs + blk.relTime) * info.timestampScale) / 1e6;
+        if (tsMs < fromMs - 100) continue; // pre-roll tolerance
+        for (const [off, len] of blk.frames) {
+          if (len > 0 && off + len <= bytes.length) yield { tsMs, data: bytes.subarray(off, off + len) };
+        }
+      }
+    }
+  } catch {
+    // Truncated or malformed tail: end the stream with what we have.
+  }
 }

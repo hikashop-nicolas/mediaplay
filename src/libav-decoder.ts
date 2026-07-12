@@ -10,7 +10,7 @@
 
 import { CustomAudioDecoder, registerDecoder, AudioSample, type EncodedPacket } from "mediabunny";
 
-const LIBAV_LOADER = "libav-6.9.8.1-eac3.mjs"; // the variant we build in-repo (see scripts/build-libav.sh)
+const LIBAV_LOADER = "libav-6.9.8.1-audio.mjs"; // the "audio" variant built in-repo (see libav/NOTICE.md)
 
 let libavBase = "";
 let libavPromise: Promise<unknown> | null = null;
@@ -125,4 +125,79 @@ export function registerAc3Decoder(): void {
   if (registered) return;
   registerDecoder(LibavAc3Decoder);
   registered = true;
+}
+
+// --- direct decode API (bypasses mediabunny, whose codec model lacks DTS/TrueHD) ---
+
+/** Matroska CodecID -> FFmpeg decoder name, for codecs our libav build decodes. */
+export const MKV_LIBAV_CODECS: Record<string, string> = {
+  A_AC3: "ac3",
+  A_EAC3: "eac3",
+  A_DTS: "dca",
+  A_TRUEHD: "truehd",
+  A_MLP: "mlp",
+};
+
+/** One decoded frame, normalized to per-channel Float32 planes. */
+export interface DirectFrame {
+  rate: number;
+  channels: number;
+  nb: number;
+  planes: Float32Array[];
+}
+
+/** Normalize any libav sample array (s16/s32/f64...) to Float32 in [-1, 1]. */
+function toF32(a: ArrayLike<number>): Float32Array {
+  if (a instanceof Float32Array) return a;
+  const out = new Float32Array(a.length);
+  if (a instanceof Int32Array) for (let i = 0; i < a.length; i++) out[i] = a[i]! / 2147483648;
+  else if (a instanceof Int16Array) for (let i = 0; i < a.length; i++) out[i] = a[i]! / 32768;
+  else if (a instanceof Uint8Array) for (let i = 0; i < a.length; i++) out[i] = (a[i]! - 128) / 128;
+  else for (let i = 0; i < a.length; i++) out[i] = a[i]!; // f64 or already-float-ish
+  return out;
+}
+
+export interface DirectAudioDecoder {
+  decode(packets: Uint8Array[]): Promise<DirectFrame[]>;
+  flush(): Promise<DirectFrame[]>;
+  close(): void;
+}
+
+/** Open a decoder for an FFmpeg codec name (see MKV_LIBAV_CODECS); caller feeds raw
+ *  encoded packets (e.g. from readAudioPackets) and gets Float32 planes back. */
+export async function createDirectAudioDecoder(ffName: string, base: string): Promise<DirectAudioDecoder> {
+  setLibavBase(base);
+  const libav: any = await (libavPromise ?? loadLibav());
+  const [, ctx, pkt, frame] = await libav.ff_init_decoder(ffName);
+  const norm = (frames: any[]): DirectFrame[] =>
+    frames.map((f: any) => {
+      if (Array.isArray(f.data)) {
+        // Planar: one array per channel.
+        const planes = (f.data as ArrayLike<number>[]).map(toF32);
+        return { rate: f.sample_rate, channels: planes.length, nb: planes[0]?.length ?? 0, planes };
+      }
+      // Interleaved: deinterleave into planes.
+      const data = toF32(f.data as ArrayLike<number>);
+      const ch = Math.max(1, libav.ff_channels(f));
+      const nb = Math.floor(data.length / ch);
+      const planes: Float32Array[] = [];
+      for (let c = 0; c < ch; c++) {
+        const p = new Float32Array(nb);
+        for (let i = 0; i < nb; i++) p[i] = data[i * ch + c]!;
+        planes.push(p);
+      }
+      return { rate: f.sample_rate, channels: ch, nb, planes };
+    });
+  return {
+    async decode(packets) {
+      if (!packets.length) return [];
+      return norm(await libav.ff_decode_multi(ctx, pkt, frame, packets.map((data) => ({ data })), false));
+    },
+    async flush() {
+      return norm(await libav.ff_decode_multi(ctx, pkt, frame, [], true));
+    },
+    close() {
+      Promise.resolve(libav.ff_free_decoder(ctx, pkt, frame)).catch(() => undefined);
+    },
+  };
 }

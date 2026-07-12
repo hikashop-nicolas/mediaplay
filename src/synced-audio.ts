@@ -8,7 +8,8 @@
 // offset introduced by a transition is absorbed within a few (32 ms) buffers.
 
 import { Input, ALL_FORMATS, BufferSource, AudioBufferSink, type InputAudioTrack } from "mediabunny";
-import { setLibavBase, registerAc3Decoder } from "./libav-decoder";
+import { setLibavBase, registerAc3Decoder, createDirectAudioDecoder, MKV_LIBAV_CODECS, type DirectFrame } from "./libav-decoder";
+import { readAudioPackets, type MkvInfo } from "./mkv";
 
 const LOOKAHEAD = 1.5; // seconds of audio to keep scheduled ahead (survives main-thread stalls)
 const LEAD_IN = 0.05; // small audio-clock headroom at anchor (also the residual A/V offset)
@@ -22,9 +23,21 @@ export interface SyncedAudioHandle {
   destroy(): void;
 }
 
+interface AudioChunk {
+  buffer: AudioBuffer;
+  timestamp: number;
+  duration: number;
+}
+
+/** A pull-based stream of decoded audio chunks starting at a media time. Implemented
+ *  by mediabunny (AudioBufferSink) and by the direct Matroska->libav path. */
+interface AudioChunkSource {
+  buffers(fromTime: number, ctx: AudioContext): AsyncGenerator<AudioChunk, void, unknown>;
+}
+
 class SyncedAudio {
   private readonly ctx: AudioContext;
-  private readonly sink: AudioBufferSink;
+  private readonly source: AudioChunkSource;
   private readonly gain: GainNode; // master output (buffer sources -> gain -> analyser -> speakers)
   private readonly analyser: AnalyserNode;
   private token = 0;
@@ -34,7 +47,7 @@ class SyncedAudio {
   private readonly cleanups: (() => void)[] = [];
   private restartTimer = 0;
   private pauseTimer = 0;
-  private currentIter: ReturnType<AudioBufferSink["buffers"]> | null = null;
+  private currentIter: AsyncGenerator<AudioChunk, void, unknown> | null = null;
   private reseeks = 0;
   // Until the first user gesture the video stays force-muted (that's what let it
   // autoplay), so video.muted can't be honored yet; after the gesture unmutes it, the
@@ -43,7 +56,7 @@ class SyncedAudio {
 
   constructor(
     private readonly video: HTMLMediaElement,
-    track: InputAudioTrack,
+    source: AudioChunkSource,
   ) {
     this.ctx = new AudioContext();
     this.gain = this.ctx.createGain();
@@ -52,7 +65,7 @@ class SyncedAudio {
     this.analyser.connect(this.ctx.destination);
     // Test hook: lets an instrumented page (demo/gaptest) attach an analyzer to the graph.
     (globalThis as { __mediaplayDebugTap?: (ctx: AudioContext, gain: GainNode) => void }).__mediaplayDebugTap?.(this.ctx, this.gain);
-    this.sink = new AudioBufferSink(track);
+    this.source = source;
     const on = (ev: string, fn: EventListener) => {
       this.video.addEventListener(ev, fn);
       this.listeners.push([ev, fn]);
@@ -141,7 +154,7 @@ class SyncedAudio {
       }
     }
     if (myToken !== this.token || this.disposed) return; // superseded while closing
-    const iter = this.sink.buffers(this.video.currentTime);
+    const iter = this.source.buffers(this.video.currentTime, this.ctx);
     this.currentIter = iter;
     await this.run(myToken, iter);
   }
@@ -158,7 +171,7 @@ class SyncedAudio {
     this.active.clear();
   }
 
-  private async run(token: number, iter: ReturnType<AudioBufferSink["buffers"]>): Promise<void> {
+  private async run(token: number, iter: AsyncGenerator<AudioChunk, void, unknown>): Promise<void> {
     if (this.ctx.state === "suspended" && !this.video.paused) {
       try {
         await this.ctx.resume();
@@ -258,11 +271,119 @@ class SyncedAudio {
   }
 }
 
+/** mediabunny-backed source: demux + decode via the registered CustomAudioDecoder. */
+function mediabunnySource(track: InputAudioTrack): AudioChunkSource {
+  const sink = new AudioBufferSink(track);
+  return {
+    async *buffers(fromTime: number): AsyncGenerator<AudioChunk, void, unknown> {
+      yield* sink.buffers(fromTime);
+    },
+  };
+}
+
+/**
+ * Direct Matroska -> libav source, for codecs mediabunny's codec model cannot carry
+ * (DTS, TrueHD/MLP): read the track's encoded frames with our own EBML block reader,
+ * decode them in batches, and coalesce the small decoded frames (TrueHD frames are
+ * under 1 ms) into ~85 ms AudioBuffers so the scheduler isn't flooded with nodes.
+ */
+function mkvDirectSource(bytes: Uint8Array, trackNumber: number, ffCodec: string, base: string, info: MkvInfo): AudioChunkSource {
+  const CHUNK = 4096; // min samples per emitted AudioBuffer
+  const BATCH = 16; // encoded packets per decode call
+  return {
+    async *buffers(fromTime: number, ctx: AudioContext): AsyncGenerator<AudioChunk, void, unknown> {
+      const dec = await createDirectAudioDecoder(ffCodec, base);
+      try {
+        let rate = 0;
+        let channels = 0;
+        let clockTs = 0; // media time of the next decoded sample
+        let clockSamples = 0;
+        let anchored = false;
+        let chunkTs: number | null = null; // media time of the first pending sample
+        let pend: Float32Array[][] = [];
+        let pendSamples = 0;
+        const build = (): AudioChunk => {
+          const buffer = ctx.createBuffer(Math.max(1, channels), pendSamples, rate || 48000);
+          for (let c = 0; c < channels; c++) {
+            const chd = buffer.getChannelData(c);
+            let o = 0;
+            for (const planes of pend) {
+              const p = planes[Math.min(c, planes.length - 1)]!;
+              chd.set(p, o);
+              o += p.length;
+            }
+          }
+          const chunk = { buffer, timestamp: chunkTs!, duration: pendSamples / (rate || 48000) };
+          pend = [];
+          pendSamples = 0;
+          chunkTs = null;
+          return chunk;
+        };
+        const ingest = (frames: DirectFrame[]): AudioChunk[] => {
+          const out: AudioChunk[] = [];
+          for (const f of frames) {
+            if (!f.nb) continue;
+            if (rate && (f.rate !== rate || f.channels !== channels) && pendSamples) out.push(build());
+            rate = f.rate;
+            channels = f.channels;
+            if (chunkTs == null) chunkTs = clockTs + clockSamples / rate;
+            pend.push(f.planes);
+            pendSamples += f.nb;
+            clockSamples += f.nb;
+            if (pendSamples >= CHUNK) out.push(build());
+          }
+          return out;
+        };
+        let batch: Uint8Array[] = [];
+        let batchTs = 0;
+        const packets = readAudioPackets(bytes, trackNumber, fromTime * 1000, info);
+        for (const pkt of packets) {
+          if (!batch.length) batchTs = pkt.tsMs / 1000;
+          batch.push(pkt.data);
+          if (batch.length < BATCH) continue;
+          // Anchor/adjust the sample clock at batch boundaries (where a real container
+          // timestamp is known); laced frames inside a block share the block time.
+          const expected = clockTs + (rate ? clockSamples / rate : 0);
+          if (!anchored || Math.abs(batchTs - expected) > 0.25) {
+            if (pendSamples) yield build();
+            clockTs = batchTs;
+            clockSamples = 0;
+            anchored = true;
+          }
+          const chunks = ingest(await dec.decode(batch));
+          batch = [];
+          for (const c of chunks) yield c;
+        }
+        if (batch.length) {
+          const chunks = ingest(await dec.decode(batch));
+          for (const c of chunks) yield c;
+        }
+        const tail = ingest(await dec.flush());
+        for (const c of tail) yield c;
+        if (pendSamples) yield build();
+      } finally {
+        dec.close();
+      }
+    },
+  };
+}
+
+/** Direct-decode routing for playSyncedAudio: the Matroska metadata of the chosen track. */
+export interface DirectAudioInfo {
+  /** Matroska TrackNumber of the audio track. */
+  mkvTrackNumber: number;
+  /** Matroska CodecID (e.g. A_DTS). */
+  mkvCodec: string;
+  /** The parse result of extractMkvInfo (cluster index + timestamp scale). */
+  info: MkvInfo;
+}
+
 /**
  * Start playing `bytes`' audio track number `audioIndex` (index into the file's audio
- * tracks) in sync with `video`, decoding it with the libav AC-3/E-AC-3 decoder served
- * from `base`. The caller should mute `video` first. Returns a handle, or "undecodable"
- * if the track can't be decoded, or null if there's no such track.
+ * tracks) in sync with `video`, decoding it with the bundled libav decoder served from
+ * `base`. AC-3/E-AC-3 route through mediabunny; DTS/TrueHD/MLP need `direct` (Matroska
+ * only) because mediabunny's codec model cannot carry them. The caller should mute
+ * `video` first. Returns a handle, or "undecodable", or null if there's no such track.
  */
 // Only one decoded-audio stream exists at a time. This is semantically right (you can't
 // watch two videos at once) and defends against a host mounting the player more than once
@@ -279,21 +400,31 @@ export async function playSyncedAudio(
   bytes: Uint8Array,
   audioIndex: number,
   base: string,
+  direct?: DirectAudioInfo,
 ): Promise<SyncedAudioHandle | "undecodable" | null> {
   setLibavBase(base);
   registerAc3Decoder();
   // Tear down any previous stream up front, so two concurrent starts can't both run.
   stopCurrentEngine();
   try {
-    // Pass the view directly (no copy): the file can be very large.
-    const input = new Input({ source: new BufferSource(bytes), formats: ALL_FORMATS });
-    const tracks = await input.getTracks();
-    const audioTracks = tracks.filter((t) => t.isAudioTrack());
-    const track = audioTracks[audioIndex] ?? audioTracks[0];
-    if (!track) return null;
-    // A newer start may have happened while we awaited getTracks; it wins.
+    let source: AudioChunkSource;
+    const ffCodec = direct ? MKV_LIBAV_CODECS[direct.mkvCodec.toUpperCase()] : undefined;
+    if (direct && ffCodec && !/^A_E?AC3$/i.test(direct.mkvCodec)) {
+      // DTS / TrueHD / MLP: our own EBML packet reader feeds libav directly.
+      if (!direct.info.clusters.length) return "undecodable";
+      source = mkvDirectSource(bytes, direct.mkvTrackNumber, ffCodec, base, direct.info);
+    } else {
+      // Pass the view directly (no copy): the file can be very large.
+      const input = new Input({ source: new BufferSource(bytes), formats: ALL_FORMATS });
+      const tracks = await input.getTracks();
+      const audioTracks = tracks.filter((t) => t.isAudioTrack());
+      const track = audioTracks[audioIndex] ?? audioTracks[0];
+      if (!track) return null;
+      source = mediabunnySource(track);
+    }
+    // A newer start may have happened while we awaited setup; it wins.
     stopCurrentEngine();
-    const engine = new SyncedAudio(video, track);
+    const engine = new SyncedAudio(video, source);
     currentEngine = engine;
     engine.start();
     return {
