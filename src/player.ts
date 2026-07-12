@@ -1,6 +1,25 @@
 import { decodeSubtitleBytes, extractMkvInfo, subtitleFileToVtt, type MkvAudioTrack } from "./mkv";
 import { strings, type MediaStrings } from "./i18n";
 
+// Matroska audio CodecID -> a MIME to probe the browser with. Only the codecs a browser
+// might refuse (the Dolby / DTS family) need probing; everything else (AAC, MP3, Opus,
+// Vorbis, FLAC, PCM) plays. When the browser lacks one of these decoders, an in-memory
+// transcode can't rescue it either: WebCodecs shares the same platform decoders, so it
+// would fail to decode the source too. Hence we detect and inform rather than transcode.
+const AUDIO_PROBE: Record<string, string> = {
+  A_EAC3: 'audio/mp4; codecs="ec-3"',
+  A_AC3: 'audio/mp4; codecs="ac-3"',
+  A_DTS: 'audio/mp4; codecs="dtsc"',
+  A_TRUEHD: "audio/true-hd",
+  A_MLP: "audio/mlp",
+};
+
+/** True when the browser has no decoder for this Matroska audio codec (video still plays silently). */
+function browserLacksAudioCodec(codec: string, probe: HTMLMediaElement): boolean {
+  const mime = AUDIO_PROBE[codec.toUpperCase()];
+  return mime ? probe.canPlayType(mime) === "" : false;
+}
+
 // Read-only audio/video player. Plays the bytes via a blob URL in a <video> or <audio>
 // element (chosen by MIME). Codec support is whatever the platform browser provides; when
 // direct playback fails, the file is remuxed in memory (mediabunny, lazy chunk) into a
@@ -26,6 +45,8 @@ export interface LibassAssets {
   workerUrl?: string;
   /** URL of the Latin fallback font (default.woff2). */
   fontUrl?: string;
+  /** Extra font URLs for libass (e.g. a CJK font); merged with any fonts embedded in the file. */
+  fonts?: string[];
 }
 
 export interface MediaPlayerOptions {
@@ -68,6 +89,10 @@ function ensureStyles(): void {
       background:rgba(20,20,24,0.85); color:#fff; font:600 14px system-ui, sans-serif;
       padding:6px 10px; border-radius:8px; opacity:0; transition:opacity .2s; }
     .ot-media-rate.show { opacity:1; }
+    .ot-media-toast { position:absolute; top:14px; left:50%; transform:translateX(-50%); z-index:2;
+      max-width:min(80%, 560px); background:rgba(20,20,24,0.9); color:#fff; font:600 13px system-ui, sans-serif;
+      padding:8px 14px; border-radius:8px; text-align:center; line-height:1.4; opacity:0; transition:opacity .3s; }
+    .ot-media-toast.show { opacity:1; }
     .ot-media-tracksbtn { position:absolute; top:12px; left:14px; z-index:2;
       background:rgba(20,20,24,0.85); color:#fff; font:600 13px system-ui, sans-serif;
       padding:6px 10px; border:1px solid rgba(255,255,255,0.25); border-radius:8px; cursor:pointer;
@@ -88,10 +113,6 @@ function ensureStyles(): void {
   `;
   document.head.appendChild(s);
 }
-
-// Han/kana/hangul in a subtitle script: the bundled libass fallback font is Latin-only,
-// so styled rendering would show tofu; those tracks use the plain-text path instead.
-const CJK_RE = /[぀-ヿ㐀-鿿가-힯]/;
 
 const SEEK_STEP = 5; // seconds
 const VOLUME_STEP = 0.05;
@@ -200,6 +221,19 @@ class MediaPlayer implements MediaPlayerHandle {
         const sc = s % 60;
         const p = (n: number) => String(n).padStart(2, "0");
         return h ? `${h}:${p(mn)}:${p(sc)}` : `${mn}:${p(sc)}`;
+      };
+      // Top-centre banner that fades on its own; used for notices like "audio codec
+      // unsupported", which shouldn't permanently cover the (still-playing) video.
+      const showToast = (text: string, ms = 6500) => {
+        const toast = document.createElement("div");
+        toast.className = "ot-media-toast";
+        toast.textContent = text;
+        wrap.appendChild(toast);
+        window.requestAnimationFrame(() => toast.classList.add("show"));
+        window.setTimeout(() => {
+          toast.classList.remove("show");
+          window.setTimeout(() => toast.remove(), 350);
+        }, ms);
       };
       const flashSeek = () => flashBadge(Number.isFinite(m.duration) ? `${fmtClock(m.currentTime)} / ${fmtClock(m.duration)}` : fmtClock(m.currentTime));
       const flashVolume = () => flashBadge(m.muted ? "🔇" : `🔊 ${Math.round(m.volume * 100)}%`);
@@ -348,6 +382,9 @@ class MediaPlayer implements MediaPlayerHandle {
         let lastSub = 0;
         let audioTracks: MkvAudioTrack[] = [];
         let activeAudio = 0;
+        // Fonts handed to libass so styled subs use the intended faces (fonts embedded in
+        // the file + any the host supplied); populated once track info is parsed, below.
+        let libassFonts: string[] = [...(this.opts.libass?.fonts ?? [])];
         let octopus: { dispose(): void; resize?: () => void } | null = null;
         let octopusFor = -1;
         const dropOctopus = () => {
@@ -374,6 +411,7 @@ class MediaPlayer implements MediaPlayerHandle {
               subContent: entry.assDoc!,
               workerUrl: this.workerUrl,
               fallbackFont: this.fontUrl,
+              fonts: libassFonts.length ? libassFonts : undefined,
               onError: () => {
                 dropOctopus();
                 showVttFallback(i);
@@ -508,7 +546,9 @@ class MediaPlayer implements MediaPlayerHandle {
           if (i >= 0) lastSub = i;
           if (octopusFor !== i) dropOctopus();
           const target = i >= 0 ? subTracks[i] : undefined;
-          const styled = !!target?.assDoc && !CJK_RE.test(target.assDoc);
+          // ASS tracks render styled via libass; the file's embedded fonts (and any host
+          // fonts) are handed to it, so CJK signs/songs use the intended faces, not tofu.
+          const styled = !!target?.assDoc;
           subTracks.forEach((entry, j) => {
             if (entry.el) entry.el.track.mode = j === i && !styled ? "showing" : "disabled";
           });
@@ -596,9 +636,20 @@ class MediaPlayer implements MediaPlayerHandle {
           if (!this.wrap) return;
           try {
             const info = extractMkvInfo(source.bytes);
+            // Hand the file's embedded fonts to libass BEFORE selecting a track, so the
+            // first styled render already resolves the intended (incl. CJK) faces.
+            for (const f of info.fonts) {
+              const url = URL.createObjectURL(new Blob([f.data as BlobPart], { type: f.mime || "font/otf" }));
+              this.subUrls.push(url); // revoked on dispose alongside the VTT blobs
+              libassFonts.push(url);
+            }
             info.subtitles.forEach((s, i) => addSubTrack({ label: s.label || s.language, lang: s.language, vtt: s.vtt, assDoc: s.assDoc }, i === 0));
             audioTracks = info.audio;
             rebuildMenu();
+            // Video plays but the audio codec has no browser decoder (Dolby/DTS): the
+            // element stays silent with no error event, so tell the user why.
+            const activeCodec = audioTracks[activeAudio]?.codec;
+            if (activeCodec && browserLacksAudioCodec(activeCodec, m)) showToast(S.mediaAudioUnsupported);
           } catch {
             /* track info is best-effort */
           }

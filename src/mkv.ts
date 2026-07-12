@@ -18,11 +18,21 @@ export interface MkvAudioTrack {
   number: number;
   label: string;
   language: string;
+  /** Matroska CodecID (e.g. A_EAC3, A_AAC); lets the player spot codecs the browser can't decode. */
+  codec: string;
+}
+
+/** An embedded font attachment, handed to libass so styled subtitles use the intended fonts. */
+export interface MkvFont {
+  name: string;
+  mime: string;
+  data: Uint8Array;
 }
 
 export interface MkvInfo {
   subtitles: MkvSubtitleTrack[];
   audio: MkvAudioTrack[];
+  fonts: MkvFont[];
 }
 
 // Element IDs (including their length-marker bits, as stored in the file).
@@ -39,6 +49,11 @@ const ID_NAME = 0x536e;
 const ID_LANGUAGE = 0x22b59c;
 const ID_LANGUAGE_BCP47 = 0x22b59d;
 const ID_CODEC_PRIVATE = 0x63a2;
+const ID_ATTACHMENTS = 0x1941a469;
+const ID_ATTACHED_FILE = 0x61a7;
+const ID_FILE_NAME = 0x466e;
+const ID_FILE_MIME = 0x4660;
+const ID_FILE_DATA = 0x465c;
 const ID_CLUSTER = 0x1f43b675;
 const ID_CLUSTER_TIMESTAMP = 0xe7;
 const ID_SIMPLE_BLOCK = 0xa3;
@@ -239,12 +254,42 @@ export function subtitleFileToVtt(name: string, bytes: Uint8Array): string {
 }
 
 export function extractMkvInfo(bytes: Uint8Array): MkvInfo {
-  const empty: MkvInfo = { subtitles: [], audio: [] };
+  const empty: MkvInfo = { subtitles: [], audio: [], fonts: [] };
   if (bytes.length < 8 || bytes[0] !== 0x1a || bytes[1] !== 0x45 || bytes[2] !== 0xdf || bytes[3] !== 0xa3) return empty;
   const r = new Reader(bytes);
   const tracks = new Map<number, TrackInfo>();
   const audio: MkvAudioTrack[] = [];
+  const fonts: MkvFont[] = [];
   let scale = 1_000_000; // ns per tick (default = 1 ms)
+
+  const parseAttachments = (end: number): void => {
+    while (r.pos < end) {
+      const id = r.readId();
+      const size = r.readSize();
+      if (size == null) throw new Error("bad attachments");
+      if (id === ID_ATTACHED_FILE) {
+        const fEnd = r.pos + size;
+        let name = "";
+        let mime = "";
+        let data: Uint8Array | null = null;
+        while (r.pos < fEnd) {
+          const fid = r.readId();
+          const fsize = r.readSize();
+          if (fsize == null) throw new Error("bad attached file");
+          if (fid === ID_FILE_NAME) name = utf8.decode(r.bytes(fsize));
+          else if (fid === ID_FILE_MIME) mime = utf8.decode(r.bytes(fsize)).replace(/\0+$/, "");
+          else if (fid === ID_FILE_DATA) data = r.bytes(fsize).slice();
+          r.pos += fsize;
+        }
+        r.pos = fEnd;
+        // Keep font attachments only (mime font/* or the common .ttf/.otf/.ttc names).
+        if (data && (/^(application\/x-truetype-font|application\/font|font)\b|opentype|truetype/i.test(mime) || /\.(ttf|otf|ttc|otc)$/i.test(name)))
+          fonts.push({ name, mime, data });
+      } else {
+        r.pos += size;
+      }
+    }
+  };
 
   const parseBlock = (size: number, clusterTs: number, duration: number | null): void => {
     const start = r.pos;
@@ -289,7 +334,7 @@ export function extractMkvInfo(bytes: Uint8Array): MkvInfo {
     }
     r.pos = end;
     if (type === 0x11 && codec.startsWith("S_TEXT")) tracks.set(num, { codec, label: name, language: lang || "und", cues: [], codecPrivate: priv || undefined, assEvents: [] });
-    else if (type === 0x02) audio.push({ number: num, label: name, language: lang || "und" });
+    else if (type === 0x02) audio.push({ number: num, label: name, language: lang || "und", codec });
   };
 
   const parseCluster = (end: number | null): void => {
@@ -364,12 +409,14 @@ export function extractMkvInfo(bytes: Uint8Array): MkvInfo {
               if (tid === ID_TRACK_ENTRY) parseTrackEntry(r.pos + tsize);
               else r.pos += tsize;
             }
+          } else if (cid === ID_ATTACHMENTS && csize != null) {
+            parseAttachments(r.pos + csize);
           } else if (cid === ID_CLUSTER) {
             parseCluster(csize == null ? null : r.pos + csize);
           } else if (csize != null) {
             r.pos += csize;
           } else {
-            return { subtitles: finish(tracks), audio }; // unknown-size non-cluster: bail with what we have
+            return { subtitles: finish(tracks), audio, fonts }; // unknown-size non-cluster: bail with what we have
           }
         }
       } else if (size != null) {
@@ -381,7 +428,7 @@ export function extractMkvInfo(bytes: Uint8Array): MkvInfo {
   } catch {
     // Truncated or malformed tail: keep whatever cues were collected.
   }
-  return { subtitles: finish(tracks), audio };
+  return { subtitles: finish(tracks), audio, fonts };
 }
 
 function finish(tracks: Map<number, TrackInfo>): MkvSubtitleTrack[] {

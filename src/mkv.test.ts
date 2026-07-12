@@ -150,9 +150,41 @@ describe("mkv audio track listing", () => {
     const audioEn = el(0xae, [...el(0xd7, [3]), ...el(0x83, [0x02]), ...el(0x86, Array.from(te.encode("A_AAC")))]);
     const info = extractMkvInfo(mkv({ tracks: [...audioJa, ...audioEn], clusters: [] }));
     expect(info.audio).toEqual([
-      { number: 2, label: "Japanese", language: "jpn" },
-      { number: 3, label: "", language: "und" },
+      { number: 2, label: "Japanese", language: "jpn", codec: "A_AAC" },
+      { number: 3, label: "", language: "und", codec: "A_AAC" },
     ]);
+  });
+});
+
+describe("font attachments", () => {
+  const attachedFile = (name: string, mime: string, data: number[]): number[] =>
+    el(0x61a7, [...el(0x466e, Array.from(te.encode(name))), ...el(0x4660, Array.from(te.encode(mime))), ...el(0x465c, data)]);
+
+  function mkvWithAttachments(files: number[][]): Uint8Array {
+    const segment = el(0x18538067, [
+      ...el(0x1549a966, el(0x2ad7b1, uintPayload(1_000_000))),
+      ...el(0x1654ae6b, subtitleTrackEntry(1, "S_TEXT/ASS")),
+      ...el(0x1941a469, files.flat()),
+    ]);
+    return new Uint8Array([...el(0x1a45dfa3, []), ...segment]);
+  }
+
+  it("extracts font attachments and skips non-font ones", () => {
+    const info = extractMkvInfo(
+      mkvWithAttachments([
+        attachedFile("Sign.otf", "font/otf", [1, 2, 3, 4]),
+        attachedFile("Dialog.ttf", "application/x-truetype-font", [5, 6]),
+        attachedFile("cover.jpg", "image/jpeg", [7, 8, 9]), // not a font -> skipped
+      ]),
+    );
+    expect(info.fonts.map((f) => f.name)).toEqual(["Sign.otf", "Dialog.ttf"]);
+    expect(Array.from(info.fonts[0]!.data)).toEqual([1, 2, 3, 4]);
+  });
+
+  it("keeps a font recognised by extension even with a generic mime", () => {
+    const info = extractMkvInfo(mkvWithAttachments([attachedFile("X.TTF", "application/octet-stream", [1])]));
+    expect(info.fonts).toHaveLength(1);
+    expect(info.fonts[0]!.name).toBe("X.TTF");
   });
 });
 

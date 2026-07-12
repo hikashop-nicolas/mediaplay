@@ -7,6 +7,7 @@ export type MediaStrings = {
   mediaKeys: string;
   mediaKeysAudio: string;
   mediaUnsupported: string;
+  mediaAudioUnsupported: string;
   mediaEmpty: string;
   mediaConverting: string;
   tracksMenu: string;
@@ -20,6 +21,7 @@ const en: MediaStrings = {
   mediaKeys: "Space: play/pause · F: fullscreen · M: mute · S/D: speed · C: subtitles · ← →: seek · ↑ ↓: volume",
   mediaKeysAudio: "Space: play/pause · M: mute · S/D: speed · ← →: seek · ↑ ↓: volume",
   mediaUnsupported: "This media format is not supported by your browser.",
+  mediaAudioUnsupported: "The video is playing without sound: its audio track uses a codec your browser can't decode (e.g. Dolby AC-3/E-AC-3 or DTS).",
   mediaEmpty: "Nothing to play.",
   mediaConverting: "Converting for playback…",
   tracksMenu: "Subtitle and audio tracks",
@@ -33,6 +35,7 @@ const fr: MediaStrings = {
   mediaKeys: "Espace : lecture/pause · F : plein écran · M : muet · S/D : vitesse · C : sous-titres · ← → : avancer/reculer · ↑ ↓ : volume",
   mediaKeysAudio: "Espace : lecture/pause · M : muet · S/D : vitesse · ← → : avancer/reculer · ↑ ↓ : volume",
   mediaUnsupported: "Ce format multimédia n'est pas pris en charge par votre navigateur.",
+  mediaAudioUnsupported: "La vidéo est lue sans le son : sa piste audio utilise un codec que votre navigateur ne sait pas décoder (par ex. Dolby AC-3/E-AC-3 ou DTS).",
   mediaEmpty: "Rien à lire.",
   mediaConverting: "Conversion pour la lecture…",
   tracksMenu: "Pistes de sous-titres et audio",
@@ -46,6 +49,7 @@ const ja: MediaStrings = {
   mediaKeys: "スペース：再生/一時停止 · F：全画面 · M：ミュート · S/D：速度 · C：字幕 · ← →：シーク · ↑ ↓：音量",
   mediaKeysAudio: "スペース：再生/一時停止 · M：ミュート · S/D：速度 · ← →：シーク · ↑ ↓：音量",
   mediaUnsupported: "このメディア形式はお使いのブラウザーでは再生できません。",
+  mediaAudioUnsupported: "音声なしで再生しています。音声トラックがお使いのブラウザーで復号できないコーデック（Dolby AC-3/E-AC-3 や DTS など）を使用しています。",
   mediaEmpty: "再生できる内容がありません。",
   mediaConverting: "再生用に変換しています…",
   tracksMenu: "字幕・音声トラック",
