@@ -39,10 +39,14 @@ class SyncedAudio {
     // Suspending the context on pause freezes scheduled audio in place, aligned with
     // the paused video; resuming continues both together.
     on("play", () => {
+      console.info(`[mediaplay:audio] video play @${this.video.currentTime.toFixed(2)}`);
       void this.ctx.resume();
       this.restart();
     });
-    on("pause", () => void this.ctx.suspend());
+    on("pause", () => {
+      console.info(`[mediaplay:audio] video pause @${this.video.currentTime.toFixed(2)}`);
+      void this.ctx.suspend();
+    });
     // A seek invalidates everything queued; drop it and re-decode from the new point.
     on("seeking", () => {
       this.stopActive();
@@ -98,6 +102,14 @@ class SyncedAudio {
     let scheduled = 0;
     try {
       for await (const { buffer, timestamp, duration } of this.sink.buffers(fromTime)) {
+        // If the decoder has fallen well behind the live clock (slow cold start, or the
+        // iterator began before the video advanced), re-seek to now rather than decoding
+        // through every stale buffer to catch up.
+        if (!this.video.paused && this.video.currentTime - timestamp > 1) {
+          this.token++;
+          void this.run(this.token, this.video.currentTime);
+          return;
+        }
         // Backpressure: hold until the video clock is within LOOKAHEAD of this buffer
         // (or we've been superseded / paused).
         let waited = false;
