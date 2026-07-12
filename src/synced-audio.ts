@@ -127,8 +127,13 @@ class SyncedAudio {
       }
     }
     let scheduled = 0;
+    let sawFirst = false;
     try {
       for await (const { buffer, timestamp, duration } of iter) {
+        if (!sawFirst) {
+          sawFirst = true;
+          console.info(`[mediaplay:audio] iterator yielded @${timestamp.toFixed(2)} (vt=${this.video.currentTime.toFixed(2)}, paused=${this.video.paused})`);
+        }
         // Backpressure: hold until the video clock is within LOOKAHEAD of this buffer
         // (or we've been superseded / paused).
         while ((this.video.paused || timestamp > this.video.currentTime + LOOKAHEAD) && token === this.token && !this.disposed) {
@@ -205,17 +210,9 @@ export async function playSyncedAudio(
     const audioTracks = tracks.filter((t) => t.isAudioTrack());
     const track = audioTracks[audioIndex] ?? audioTracks[0];
     if (!track) return null;
-    console.info(`[mediaplay:audio] track ${audioIndex} codec=${track.codec}; probing decode...`);
-    // Probe: pull the first decoded buffer. If the decoder can't handle it, this rejects.
-    const probe = new AudioBufferSink(track);
-    const firstIter = probe.buffers(0)[Symbol.asyncIterator]();
-    const first = await firstIter.next();
-    void firstIter.return?.();
-    if (first.done || !first.value) {
-      console.warn("[mediaplay:audio] probe produced no buffer");
-      return "undecodable";
-    }
-    console.info(`[mediaplay:audio] probe ok (first buffer @${first.value.timestamp.toFixed(2)}s); starting sync engine`);
+    // One sink only: a second AudioBufferSink on the same track contends with the first
+    // over the track's single packet reader and starves it, so we don't pre-probe.
+    console.info(`[mediaplay:audio] track ${audioIndex} codec=${track.codec}; starting sync engine`);
     const engine = new SyncedAudio(video, track);
     engine.start();
     return { destroy: () => engine.destroy() };
