@@ -9,7 +9,7 @@
 import { cpSync, mkdirSync, rmSync } from "node:fs";
 
 const SRC = "node_modules/@jellyfin/libass-wasm/dist/js";
-const OUT = "demo/octopus";
+const OUT = "demo/public/octopus";
 
 rmSync(OUT, { recursive: true, force: true });
 mkdirSync(OUT, { recursive: true });

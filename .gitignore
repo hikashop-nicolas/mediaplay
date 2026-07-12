@@ -1,7 +1,7 @@
 node_modules/
 demo-dist/
 dist/
-demo/octopus/
+demo/public/
 *.log
 .DS_Store
 .vite/

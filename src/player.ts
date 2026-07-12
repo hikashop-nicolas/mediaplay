@@ -1,5 +1,6 @@
 import { decodeSubtitleBytes, extractMkvInfo, subtitleFileToVtt, type MkvAudioTrack } from "./mkv";
 import { strings, type MediaStrings } from "./i18n";
+import type { SyncedAudioHandle } from "./synced-audio";
 
 // Matroska audio CodecID -> a MIME to probe the browser with. Only the codecs a browser
 // might refuse (the Dolby / DTS family) need probing; everything else (AAC, MP3, Opus,
@@ -56,6 +57,8 @@ export interface MediaPlayerOptions {
   strings?: Partial<MediaStrings>;
   /** Libass asset URLs; default to octopus/… relative to document.baseURI. */
   libass?: LibassAssets;
+  /** AC-3/E-AC-3 libav decoder assets; `base` is the served dir (default libav/ under baseURI). */
+  libav?: { base?: string };
 }
 
 export interface MediaPlayerHandle {
@@ -174,6 +177,7 @@ class MediaPlayer implements MediaPlayerHandle {
   private onDocKey: ((e: KeyboardEvent) => void) | null = null;
   private subUrls: string[] = [];
   private teardown: (() => void)[] = [];
+  private decodedAudio: SyncedAudioHandle | null = null;
   private readonly S: MediaStrings;
   private readonly workerUrl: string;
   private readonly fontUrl: string;
@@ -571,6 +575,16 @@ class MediaPlayer implements MediaPlayerHandle {
         const switchAudio = async (i: number) => {
           menu.hidden = true;
           if (i === activeAudio) return;
+          // Decoded-audio mode: every track is browser-undecodable, so restart the libav
+          // decoder on the newly chosen track rather than remuxing.
+          if (this.decodedAudio) {
+            activeAudio = i;
+            this.decodedAudio.destroy();
+            this.decodedAudio = null;
+            rebuildMenu();
+            await this.startDecodedAudio(m, i, showToast);
+            return;
+          }
           const note = document.createElement("div");
           note.className = "ot-media-msg";
           note.textContent = S.mediaConverting;
@@ -646,10 +660,15 @@ class MediaPlayer implements MediaPlayerHandle {
             info.subtitles.forEach((s, i) => addSubTrack({ label: s.label || s.language, lang: s.language, vtt: s.vtt, assDoc: s.assDoc }, i === 0));
             audioTracks = info.audio;
             rebuildMenu();
-            // Video plays but the audio codec has no browser decoder (Dolby/DTS): the
-            // element stays silent with no error event, so tell the user why.
+            // Video plays but the audio codec has no browser decoder: the element stays
+            // silent with no error event. For AC-3/E-AC-3 we can decode it ourselves
+            // (libav) and play it in sync with the muted video; other codecs (DTS,
+            // TrueHD) aren't in the decoder, so we just tell the user.
             const activeCodec = audioTracks[activeAudio]?.codec;
-            if (activeCodec && browserLacksAudioCodec(activeCodec, m)) showToast(S.mediaAudioUnsupported);
+            if (activeCodec && browserLacksAudioCodec(activeCodec, m)) {
+              if (/^A_E?AC3$/i.test(activeCodec)) void this.startDecodedAudio(m, activeAudio, showToast);
+              else showToast(S.mediaAudioUnsupported);
+            }
           } catch {
             /* track info is best-effort */
           }
@@ -674,6 +693,24 @@ class MediaPlayer implements MediaPlayerHandle {
     wrap.focus();
   }
 
+  /** Decode an AC-3/E-AC-3 track with libav and play it in sync with the muted video. */
+  private async startDecodedAudio(video: HTMLMediaElement, audioIndex: number, showToast: (text: string) => void): Promise<void> {
+    const base = this.opts.libav?.base ?? new URL("libav/", document.baseURI).toString();
+    video.muted = true; // the native track is silent (undecodable) anyway; also eases autoplay
+    try {
+      const { playSyncedAudio } = await import("./synced-audio");
+      const handle = await playSyncedAudio(video, this.bytes!, audioIndex, base);
+      if (!this.wrap) {
+        if (handle && handle !== "undecodable") handle.destroy();
+        return;
+      }
+      if (handle && handle !== "undecodable") this.decodedAudio = handle;
+      else showToast(this.S.mediaAudioUnsupported);
+    } catch {
+      if (this.wrap) showToast(this.S.mediaAudioUnsupported);
+    }
+  }
+
   getBytes(): Uint8Array | undefined {
     return this.bytes ?? undefined;
   }
@@ -683,6 +720,8 @@ class MediaPlayer implements MediaPlayerHandle {
   }
 
   destroy(): void {
+    this.decodedAudio?.destroy();
+    this.decodedAudio = null;
     for (const fn of this.teardown) fn();
     this.teardown = [];
     if (this.onDocKey) document.removeEventListener("keydown", this.onDocKey);
