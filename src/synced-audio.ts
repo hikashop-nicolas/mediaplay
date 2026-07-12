@@ -132,6 +132,11 @@ class SyncedAudio {
   }
 
   start(): void {
+    // A fresh AudioContext is "running" when the page already has user activation (e.g.
+    // the click that opened the file). If the video is paused (an embedded host opens
+    // paused), suspend it so decoded audio doesn't play on its own; the play handler
+    // resumes it when the video actually starts.
+    if (this.video.paused) void this.ctx.suspend();
     this.restart();
   }
 
