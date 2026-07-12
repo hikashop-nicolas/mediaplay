@@ -33,6 +33,7 @@ class SyncedAudio {
   private readonly listeners: [string, EventListener][] = [];
   private readonly cleanups: (() => void)[] = [];
   private restartTimer = 0;
+  private pauseTimer = 0;
   private levelTimer = 0;
   private currentIter: ReturnType<AudioBufferSink["buffers"]> | null = null;
   private reseeks = 0;
@@ -62,13 +63,18 @@ class SyncedAudio {
     // Suspending the context on pause freezes scheduled audio in place, aligned with
     // the paused video; resuming continues both together.
     on("play", () => {
-      console.info(`[mediaplay:audio] video play @${this.video.currentTime.toFixed(2)}`);
+      // A stuttering video (big file) fires rapid pause/play; do NOT restart the pipeline
+      // here (that would gap the audio every hitch). Just cancel a pending suspend and
+      // keep playing; the drift check re-aligns if the stutter caused real desync.
+      window.clearTimeout(this.pauseTimer);
       void this.ctx.resume();
-      this.restart();
     });
     on("pause", () => {
-      console.info(`[mediaplay:audio] video pause @${this.video.currentTime.toFixed(2)}`);
-      void this.ctx.suspend();
+      // Debounce: only suspend on a sustained pause, so momentary stalls don't chop audio.
+      window.clearTimeout(this.pauseTimer);
+      this.pauseTimer = window.setTimeout(() => {
+        if (this.video.paused) void this.ctx.suspend();
+      }, 300);
     });
     // A seek invalidates everything queued; drop it and re-decode from the new point.
     on("seeking", () => {
@@ -220,6 +226,7 @@ class SyncedAudio {
     this.disposed = true;
     this.token++;
     window.clearTimeout(this.restartTimer);
+    window.clearTimeout(this.pauseTimer);
     window.clearInterval(this.levelTimer);
     void this.currentIter?.return();
     this.currentIter = null;
