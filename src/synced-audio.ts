@@ -27,6 +27,7 @@ class SyncedAudio {
   private readonly cleanups: (() => void)[] = [];
   private restartTimer = 0;
   private currentIter: ReturnType<AudioBufferSink["buffers"]> | null = null;
+  private reseeks = 0;
 
   constructor(
     private readonly video: HTMLMediaElement,
@@ -134,6 +135,16 @@ class SyncedAudio {
           sawFirst = true;
           console.info(`[mediaplay:audio] iterator yielded @${timestamp.toFixed(2)} (vt=${this.video.currentTime.toFixed(2)}, paused=${this.video.paused})`);
         }
+        // Cold start: the first decoded buffer can arrive seconds late (worker + file
+        // warmup), by which point the video has run ahead. Rather than decode-and-skip
+        // hundreds of stale buffers, re-seek the now-warm decoder to the live position.
+        // Guarded (only before we've scheduled anything, capped) so it can't loop.
+        if (scheduled === 0 && this.reseeks < 3 && !this.video.paused && this.video.currentTime - timestamp > 2) {
+          this.reseeks++;
+          console.info(`[mediaplay:audio] ${(this.video.currentTime - timestamp).toFixed(1)}s behind at start; re-seeking to live`);
+          this.restart();
+          return;
+        }
         // Backpressure: hold until the video clock is within LOOKAHEAD of this buffer
         // (or we've been superseded / paused).
         while ((this.video.paused || timestamp > this.video.currentTime + LOOKAHEAD) && token === this.token && !this.disposed) {
@@ -163,7 +174,10 @@ class SyncedAudio {
           continue;
         }
         this.active.add(node);
-        if (++scheduled === 1) console.info(`[mediaplay:audio] scheduling (ctx=${this.ctx.state}, @${timestamp.toFixed(2)}s)`);
+        if (++scheduled === 1) {
+          this.reseeks = 0;
+          console.info(`[mediaplay:audio] scheduling (ctx=${this.ctx.state}, @${timestamp.toFixed(2)}s)`);
+        }
       }
     } catch (e) {
       console.warn("[mediaplay:audio] scheduling stopped:", e);
