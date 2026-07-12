@@ -60,11 +60,20 @@ export interface MediaPlayerOptions {
   libass?: LibassAssets;
   /** AC-3/E-AC-3 libav decoder assets; `base` is the served dir (default libav/ under baseURI). */
   libav?: { base?: string };
+  /** Embedded mode (host drives the player, e.g. a subtitle editor): suppress the
+   * document-level keyboard shortcuts and the CC/tracks button so the host owns both. */
+  embedded?: boolean;
 }
 
 export interface MediaPlayerHandle {
   /** The original document bytes (the player never mutates them). */
   getBytes(): Uint8Array | undefined;
+  /** The underlying <video>/<audio> element, for hosts that drive playback (seek,
+   * currentTime, play/pause). Undefined until mounted, or for an empty source. */
+  getMediaElement(): HTMLMediaElement | undefined;
+  /** Show subtitles from raw text (SRT/VTT/ASS/SSA by filename), replacing any previously
+   * set with this method. For live preview of an edited document; video sources only. */
+  setSubtitleText(content: string, filename: string): void;
   /** Move keyboard focus into the player. */
   focus(): void;
   /** Tear down: stop playback, revoke blob URLs, remove listeners and DOM. */
@@ -175,6 +184,8 @@ class MediaPlayer implements MediaPlayerHandle {
   private wrap: HTMLElement | null = null;
   private url: string | null = null;
   private bytes: Uint8Array | null = null;
+  private media: HTMLMediaElement | null = null;
+  private applyLiveSubtitle: ((content: string, filename: string) => void) | null = null;
   private onDocKey: ((e: KeyboardEvent) => void) | null = null;
   private subUrls: string[] = [];
   private teardown: (() => void)[] = [];
@@ -203,6 +214,7 @@ class MediaPlayer implements MediaPlayerHandle {
       this.url = URL.createObjectURL(blob);
       const isAudio = mime.startsWith("audio/");
       const m = document.createElement(isAudio ? "audio" : "video") as HTMLMediaElement;
+      this.media = m;
       m.src = this.url;
       m.controls = true;
       m.autoplay = true; // opening a file is the user's intent to play; policy-blocked = stays paused
@@ -365,7 +377,8 @@ class MediaPlayer implements MediaPlayerHandle {
         }
         e.preventDefault();
       };
-      document.addEventListener("keydown", this.onDocKey, true);
+      // Embedded hosts (a subtitle editor) own the keyboard; skip the global shortcuts.
+      if (!this.opts.embedded) document.addEventListener("keydown", this.onDocKey, true);
       // After a pointer interaction with the native controls (e.g. clicking the
       // timeline to seek), return focus to the player: it removes the lingering focus
       // ring on the control and keeps the keyboard model consistent.
@@ -592,6 +605,42 @@ class MediaPlayer implements MediaPlayerHandle {
           else rebuildMenu();
         };
 
+        // Host-driven live subtitle: one dedicated track, replaced (not accumulated) on
+        // each call, for previewing an edited document. Updates a running libass render
+        // in place when possible so ASS previews don't restart the worker each keystroke.
+        let liveIndex = -1;
+        this.applyLiveSubtitle = (content: string, filename: string) => {
+          let vtt: string;
+          try {
+            vtt = subtitleFileToVtt(filename, new TextEncoder().encode(content));
+          } catch {
+            return; // unparseable mid-edit; keep the last good render
+          }
+          const assDoc = /\.(ass|ssa)$/i.test(filename) ? content : undefined;
+          if (liveIndex < 0) {
+            addSubTrack({ label: S.subtitles, lang: "und", vtt, assDoc }, true);
+            liveIndex = subTracks.length - 1;
+            return;
+          }
+          const entry = subTracks[liveIndex]!;
+          entry.vtt = vtt;
+          entry.assDoc = assDoc;
+          const live = octopus as { setTrack?: (s: string) => void } | null;
+          if (assDoc && octopusFor === liveIndex && live?.setTrack) {
+            live.setTrack(assDoc);
+            return;
+          }
+          if (entry.el) {
+            URL.revokeObjectURL(entry.el.src);
+            entry.el.remove();
+            entry.el = null;
+          }
+          if (activeSub === liveIndex) {
+            dropOctopus();
+            setSub(liveIndex);
+          }
+        };
+
         const switchAudio = async (i: number) => {
           menu.hidden = true;
           if (i === activeAudio) return;
@@ -694,8 +743,11 @@ class MediaPlayer implements MediaPlayerHandle {
             /* track info is best-effort */
           }
         });
-        wrap.appendChild(btn);
-        wrap.appendChild(menu);
+        // In embedded mode the host owns subtitle choice, so hide the CC button/menu.
+        if (!this.opts.embedded) {
+          wrap.appendChild(btn);
+          wrap.appendChild(menu);
+        }
         wrap.appendChild(fileInput);
       }
       const stage = document.createElement("div");
@@ -741,6 +793,14 @@ class MediaPlayer implements MediaPlayerHandle {
     return this.bytes ?? undefined;
   }
 
+  getMediaElement(): HTMLMediaElement | undefined {
+    return this.media ?? undefined;
+  }
+
+  setSubtitleText(content: string, filename: string): void {
+    this.applyLiveSubtitle?.(content, filename);
+  }
+
   focus(): void {
     this.wrap?.focus?.();
   }
@@ -748,6 +808,8 @@ class MediaPlayer implements MediaPlayerHandle {
   destroy(): void {
     this.decodedAudio?.destroy();
     this.decodedAudio = null;
+    this.applyLiveSubtitle = null;
+    this.media = null;
     for (const fn of this.teardown) fn();
     this.teardown = [];
     if (this.onDocKey) document.removeEventListener("keydown", this.onDocKey, true);
