@@ -239,6 +239,16 @@ class SyncedAudio {
  * from `base`. The caller should mute `video` first. Returns a handle, or "undecodable"
  * if the track can't be decoded, or null if there's no such track.
  */
+// Only one decoded-audio stream exists at a time. This is semantically right (you can't
+// watch two videos at once) and defends against a host mounting the player more than once
+// (e.g. a double-open race): a stale engine would otherwise keep its own AudioContext and
+// decoder alive, overlapping audio and starving the decoder.
+let currentEngine: SyncedAudio | null = null;
+function stopCurrentEngine(): void {
+  currentEngine?.destroy();
+  currentEngine = null;
+}
+
 export async function playSyncedAudio(
   video: HTMLMediaElement,
   bytes: Uint8Array,
@@ -247,6 +257,8 @@ export async function playSyncedAudio(
 ): Promise<SyncedAudioHandle | "undecodable" | null> {
   setLibavBase(base);
   registerAc3Decoder();
+  // Tear down any previous stream up front, so two concurrent starts can't both run.
+  stopCurrentEngine();
   try {
     // Pass the view directly (no copy): the file can be very large.
     const input = new Input({ source: new BufferSource(bytes), formats: ALL_FORMATS });
@@ -254,12 +266,18 @@ export async function playSyncedAudio(
     const audioTracks = tracks.filter((t) => t.isAudioTrack());
     const track = audioTracks[audioIndex] ?? audioTracks[0];
     if (!track) return null;
-    // One sink only: a second AudioBufferSink on the same track contends with the first
-    // over the track's single packet reader and starves it, so we don't pre-probe.
+    // A newer start may have happened while we awaited getTracks; it wins.
+    stopCurrentEngine();
     console.info(`[mediaplay:audio] track ${audioIndex} codec=${track.codec}; starting sync engine`);
     const engine = new SyncedAudio(video, track);
+    currentEngine = engine;
     engine.start();
-    return { destroy: () => engine.destroy() };
+    return {
+      destroy: () => {
+        engine.destroy();
+        if (currentEngine === engine) currentEngine = null;
+      },
+    };
   } catch (e) {
     console.warn("[mediaplay:audio] playSyncedAudio failed:", e);
     return "undecodable";
