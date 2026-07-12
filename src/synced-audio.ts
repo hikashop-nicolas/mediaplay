@@ -60,6 +60,11 @@ class SyncedAudio {
       this.video.addEventListener(ev, fn);
       this.listeners.push([ev, fn]);
     };
+    // Raw video-event trace: shows whether the picture toggles because it is buffering
+    // (waiting/stalled, readyState dropping) or something drives play/pause in a loop.
+    for (const ev of ["play", "pause", "waiting", "stalled", "seeking", "seeked", "ratechange", "ended", "emptied", "suspend"]) {
+      on(ev, () => console.info(`[mediaplay:vid] ${ev} @${this.video.currentTime.toFixed(2)} ready=${this.video.readyState} net=${this.video.networkState}`));
+    }
     // Suspending the context on pause freezes scheduled audio in place, aligned with
     // the paused video; resuming continues both together.
     on("play", () => {
