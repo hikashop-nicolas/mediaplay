@@ -699,8 +699,12 @@ class MediaPlayer implements MediaPlayerHandle {
   /** Decode an AC-3/E-AC-3 track with libav and play it in sync with the muted video. */
   private async startDecodedAudio(video: HTMLMediaElement, audioIndex: number, showToast: (text: string) => void): Promise<void> {
     const base = this.opts.libav?.base ?? new URL("libav/", document.baseURI).toString();
-    video.muted = true; // the native track is silent (undecodable) anyway; also eases autoplay
-    console.info(`[mediaplay:audio] decoding via libav; base=${base}`);
+    // The native track is silent (undecodable) anyway; muting also lets it autoplay
+    // (unmuted autoplay is policy-blocked, which left it paused and starved the audio
+    // scheduler, since audio only advances while the video clock runs).
+    video.muted = true;
+    void video.play().catch(() => undefined);
+    console.info(`[mediaplay:audio] decoding via libav; base=${base}; video.paused=${video.paused}`);
     try {
       const { playSyncedAudio } = await import("./synced-audio");
       const handle = await playSyncedAudio(video, this.bytes!, audioIndex, base);

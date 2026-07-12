@@ -100,7 +100,12 @@ class SyncedAudio {
       for await (const { buffer, timestamp, duration } of this.sink.buffers(fromTime)) {
         // Backpressure: hold until the video clock is within LOOKAHEAD of this buffer
         // (or we've been superseded / paused).
+        let waited = false;
         while ((this.video.paused || timestamp > this.video.currentTime + LOOKAHEAD) && token === this.token && !this.disposed) {
+          if (!waited && scheduled === 0) {
+            console.info(`[mediaplay:audio] waiting to schedule: paused=${this.video.paused} vt=${this.video.currentTime.toFixed(2)} bufTs=${timestamp.toFixed(2)}`);
+            waited = true;
+          }
           await sleep(40);
         }
         if (token !== this.token || this.disposed) return;
