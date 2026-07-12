@@ -290,9 +290,12 @@ class MediaPlayer implements MediaPlayerHandle {
           },
         );
       });
-      // Document-level so the shortcuts work no matter where focus sits (the open
-      // dialog returns focus to the toolbar, drag-drop leaves it on the body, ...).
-      // Typing and button/menu interaction elsewhere is never hijacked.
+      // Document-level, CAPTURE phase, so the shortcuts work no matter where focus sits
+      // (the open dialog returns focus to the toolbar, drag-drop leaves it on the body)
+      // AND win over the video's native controls: after clicking the timeline, focus is
+      // inside the controls' shadow DOM, which otherwise consumes Space (native pause
+      // toggle fighting ours) and F before our bubble-phase handler ever saw them.
+      // Typing and button/menu interaction is never hijacked.
       this.onDocKey = (e: KeyboardEvent) => {
         // Gone, or hidden by a view switch. NOT offsetParent: the fullscreen top layer
         // makes the wrap position:fixed, where offsetParent is null while fully visible.
@@ -302,8 +305,10 @@ class MediaPlayer implements MediaPlayerHandle {
         // handling S/D itself): don't double-handle, or every press fires twice.
         if (e.defaultPrevented) return;
         if (e.ctrlKey || e.metaKey || e.altKey) return;
+        // Interactive elements keep their keys (typing, menus, our CC buttons) - except
+        // the media element itself: keys on the focused native controls are ours.
         const el = e.target instanceof HTMLElement ? e.target : null;
-        if (el && !wrap.contains(el) && el.closest("input, textarea, select, button, a, [contenteditable], [role=dialog], [role=menu], [role=listbox]"))
+        if (el && el !== m && el.closest("input, textarea, select, button, a, [contenteditable], [role=dialog], [role=menu], [role=listbox]"))
           return;
         const key = e.key === " " ? " " : e.key.length === 1 ? e.key.toLowerCase() : e.key;
         switch (key) {
@@ -359,7 +364,15 @@ class MediaPlayer implements MediaPlayerHandle {
         }
         e.preventDefault();
       };
-      document.addEventListener("keydown", this.onDocKey);
+      document.addEventListener("keydown", this.onDocKey, true);
+      // After a pointer interaction with the native controls (e.g. clicking the
+      // timeline to seek), return focus to the player: it removes the lingering focus
+      // ring on the control and keeps the keyboard model consistent.
+      m.addEventListener("pointerup", () => {
+        window.setTimeout(() => {
+          if (wrap.isConnected) wrap.focus({ preventScroll: true });
+        }, 0);
+      });
       // The open dialog's focus-restore lands on the toolbar after mount (and Chrome
       // shows the focused button's title tooltip over the video). Pull focus into the
       // player once ready, with retries because the restore can land after us.
@@ -729,7 +742,7 @@ class MediaPlayer implements MediaPlayerHandle {
     this.decodedAudio = null;
     for (const fn of this.teardown) fn();
     this.teardown = [];
-    if (this.onDocKey) document.removeEventListener("keydown", this.onDocKey);
+    if (this.onDocKey) document.removeEventListener("keydown", this.onDocKey, true);
     this.onDocKey = null;
     for (const u of this.subUrls) URL.revokeObjectURL(u);
     this.subUrls = [];

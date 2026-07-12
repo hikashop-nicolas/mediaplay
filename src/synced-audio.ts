@@ -36,6 +36,10 @@ class SyncedAudio {
   private pauseTimer = 0;
   private currentIter: ReturnType<AudioBufferSink["buffers"]> | null = null;
   private reseeks = 0;
+  // Until the first user gesture the video stays force-muted (that's what let it
+  // autoplay), so video.muted can't be honored yet; after the gesture unmutes it, the
+  // element's muted/volume drive the gain natively (M key, arrows, the controls' slider).
+  private muteSynced = false;
 
   constructor(
     private readonly video: HTMLMediaElement,
@@ -76,18 +80,35 @@ class SyncedAudio {
     });
     on("seeked", () => this.restart());
     on("ratechange", () => this.restart());
+    // Volume / mute: mirror the video element's state onto the decoded-audio gain, so
+    // the player's M / arrow keys and the native controls' volume slider all work.
+    on("volumechange", () => this.applyVolume());
+    this.applyVolume();
 
     // The context is created after async work (demux/probe), so it's outside the
     // original user gesture and starts "suspended"; browsers then block resume() until
-    // the next interaction. Resume on any gesture until it's actually running.
+    // the next interaction. Resume on any gesture until it's actually running. The same
+    // first gesture also lifts the autoplay force-mute on the video element (its native
+    // track is silent anyway), after which muted/volume are honored natively.
     const tryResume = () => {
       void this.ctx.resume();
+      if (!this.muteSynced && !this.disposed) {
+        this.muteSynced = true;
+        this.video.muted = false;
+        this.applyVolume();
+      }
       if (this.ctx.state === "running" || this.disposed) removeGesture();
     };
     const gestures = ["pointerdown", "keydown", "touchstart"];
     const removeGesture = () => gestures.forEach((ev) => document.removeEventListener(ev, tryResume));
     gestures.forEach((ev) => document.addEventListener(ev, tryResume, { passive: true }));
     this.cleanups.push(removeGesture);
+  }
+
+  /** Decoded-audio gain follows the video element's volume (and, once the autoplay
+   *  force-mute has been lifted, its muted flag). */
+  private applyVolume(): void {
+    this.gain.gain.value = this.muteSynced && this.video.muted ? 0 : this.video.volume;
   }
 
   start(): void {
