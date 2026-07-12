@@ -10,7 +10,9 @@
 import { Input, ALL_FORMATS, BufferSource, AudioBufferSink, type InputAudioTrack } from "mediabunny";
 import { setLibavBase, registerAc3Decoder } from "./libav-decoder";
 
-const LOOKAHEAD = 0.6; // seconds of audio to schedule ahead of the video clock
+const LOOKAHEAD = 1.5; // seconds of audio to keep scheduled ahead (survives main-thread stalls)
+const LEAD_IN = 0.05; // small audio-clock headroom at anchor (also the residual A/V offset)
+const DRIFT_MAX = 0.3; // re-anchor if audio drifts more than this from the video clock
 const sleep = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms));
 
 export interface SyncedAudioHandle {
@@ -143,40 +145,52 @@ class SyncedAudio {
       }
     }
     let scheduled = 0;
-    let sawFirst = false;
+    // Anchor mapping media-time <-> audio-clock time, fixed for this run so buffers are
+    // laid down contiguously (gapless). The video clock is used only to establish the
+    // anchor and to detect drift; per-buffer live-clock scheduling made the audio jitter.
+    let anchorCtx = 0;
+    let anchorMedia = 0;
+    let anchored = false;
     try {
       for await (const { buffer, timestamp, duration } of iter) {
-        if (!sawFirst) {
-          sawFirst = true;
-          console.info(`[mediaplay:audio] iterator yielded @${timestamp.toFixed(2)} (vt=${this.video.currentTime.toFixed(2)}, paused=${this.video.paused})`);
-        }
-        // Cold start: the first decoded buffer can arrive seconds late (worker + file
-        // warmup), by which point the video has run ahead. Rather than decode-and-skip
-        // hundreds of stale buffers, re-seek the now-warm decoder to the live position.
-        // Guarded (only before we've scheduled anything, capped) so it can't loop.
-        if (scheduled === 0 && this.reseeks < 3 && !this.video.paused && this.video.currentTime - timestamp > 2) {
+        if (token !== this.token || this.disposed) return;
+        // Cold start: the first decoded buffer can arrive late, by which point the video
+        // has run ahead. Re-seek the now-warm decoder to the live position rather than
+        // decode-and-skip hundreds of stale buffers. Guarded + capped so it can't loop.
+        if (!anchored && this.reseeks < 3 && !this.video.paused && this.video.currentTime - timestamp > 2) {
           this.reseeks++;
-          console.info(`[mediaplay:audio] ${(this.video.currentTime - timestamp).toFixed(1)}s behind at start; re-seeking to live`);
           this.restart();
           return;
         }
-        // Backpressure: hold until the video clock is within LOOKAHEAD of this buffer
-        // (or we've been superseded / paused).
-        while ((this.video.paused || timestamp > this.video.currentTime + LOOKAHEAD) && token === this.token && !this.disposed) {
-          await sleep(40);
+        // Drop buffers before the live position (from a coarse seek) until we anchor.
+        if (!anchored && timestamp < this.video.currentTime - 0.1) continue;
+
+        const rate = this.video.playbackRate || 1;
+        if (!anchored) {
+          // Map so media-time = the live video position plays now (+ a small lead), i.e.
+          // audio stays in sync with the video rather than lagging by the buffer offset.
+          anchorCtx = this.ctx.currentTime + LEAD_IN;
+          anchorMedia = this.video.currentTime;
+          anchored = true;
+        }
+        const when = anchorCtx + (timestamp - anchorMedia) / rate;
+
+        // Backpressure: keep at most LOOKAHEAD scheduled ahead of the audio clock.
+        while (when > this.ctx.currentTime + LOOKAHEAD && token === this.token && !this.disposed) {
+          await sleep(80);
         }
         if (token !== this.token || this.disposed) return;
 
-        const rate = this.video.playbackRate || 1;
-        const now = this.ctx.currentTime;
-        let when = now + (timestamp - this.video.currentTime) / rate;
-        let offset = 0;
-        if (when < now) {
-          // This buffer is already (partly) in the past relative to the clock.
-          offset = (now - when) * rate;
-          when = now;
+        // Drift: if the audio's media position has slipped from the video clock (the two
+        // clocks tick slightly differently, or a pause/resume nudged them), re-anchor.
+        if (!this.video.paused && this.ctx.state === "running") {
+          const audioMediaNow = anchorMedia + (this.ctx.currentTime - anchorCtx) * rate;
+          if (Math.abs(audioMediaNow - this.video.currentTime) > DRIFT_MAX) {
+            this.restart();
+            return;
+          }
         }
-        if (offset >= duration) continue; // fully in the past, skip it
+        if (when < this.ctx.currentTime - duration) continue; // wholly in the past, skip
 
         const node = this.ctx.createBufferSource();
         node.buffer = buffer;
@@ -184,14 +198,14 @@ class SyncedAudio {
         node.connect(this.gain);
         node.onended = () => this.active.delete(node);
         try {
-          node.start(when, offset);
+          node.start(Math.max(when, this.ctx.currentTime));
         } catch {
           continue;
         }
         this.active.add(node);
         if (++scheduled === 1) {
           this.reseeks = 0;
-          console.info(`[mediaplay:audio] scheduling (ctx=${this.ctx.state}, @${timestamp.toFixed(2)}s)`);
+          console.info(`[mediaplay:audio] scheduling (ctx=${this.ctx.state}, @${timestamp.toFixed(2)}s, vt=${this.video.currentTime.toFixed(2)})`);
         }
       }
     } catch (e) {
