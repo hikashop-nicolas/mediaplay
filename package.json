@@ -1,0 +1,41 @@
+{
+  "name": "mediaplay",
+  "version": "0.1.0",
+  "description": "Standalone client-side audio/video player for the browser: plays your file's bytes directly, remuxes in memory when the browser can't (no re-encode), and renders embedded and external subtitles including styled ASS. No server, no upload.",
+  "type": "module",
+  "license": "MIT",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "build:demo": "npm run assets && vite build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "assets": "node scripts/copy-octopus-assets.mjs",
+    "dev": "npm run assets && vite",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:e2e": "npm run build:demo && start-server-and-test 'vite preview --port 5173 --strictPort' http://localhost:5173 'cypress run --browser chrome'",
+    "prepare": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@jellyfin/libass-wasm": "^4.2.4",
+    "mediabunny": "^1.50.7"
+  },
+  "devDependencies": {
+    "cypress": "^15.0.0",
+    "start-server-and-test": "^2.0.0",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.16",
+    "vitest": "^4.0.0"
+  }
+}
