@@ -627,9 +627,12 @@ class MediaPlayer implements MediaPlayerHandle {
           const entry = subTracks[liveIndex]!;
           entry.vtt = vtt;
           entry.assDoc = assDoc;
-          const live = octopus as { setTrack?: (s: string) => void } | null;
+          const live = octopus as { setTrack?: (s: string) => void; setCurrentTime?: (t: number) => void } | null;
           if (assDoc && octopusFor === liveIndex && live?.setTrack) {
             live.setTrack(assDoc);
+            // setTrack only queues new content; force a render at the current time so a
+            // paused preview updates immediately (else a moved-away cue lingers on screen).
+            live.setCurrentTime?.(m.currentTime);
             return;
           }
           if (entry.el) {
