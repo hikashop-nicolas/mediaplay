@@ -66,7 +66,12 @@ and HEVC where the OS licenses it. There is no software video decoding.
 |---|---|
 | AAC, MP3, Opus, Vorbis, FLAC, PCM | Natively by the browser (directly or after remux) |
 | **AC-3, E-AC-3 (Dolby Digital / Plus)** | Bundled FFmpeg WASM decoder → Web Audio, synced to the video |
-| DTS, TrueHD | Not included in the decoder build — the player shows a clear notice |
+| **DTS, TrueHD** | Same bundled decoder, fed from the Matroska reader |
+
+Legacy SD containers/codecs (DivX/XviD AVI, MPEG-PS, WMV, FLV) are a planned
+transcode-to-play feature — see [`_plans/LEGACY_FORMATS_PLAN.md`](./_plans/LEGACY_FORMATS_PLAN.md),
+which also documents what is explicitly out of scope (Hi10P, HEVC without platform
+support, HD software decode).
 
 ## Subtitle assets (libass)
 
