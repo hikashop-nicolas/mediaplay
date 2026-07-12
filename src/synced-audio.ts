@@ -164,6 +164,7 @@ class SyncedAudio {
     // anchor and to detect drift; per-buffer live-clock scheduling made the audio jitter.
     let anchorCtx = 0;
     let anchorMedia = 0;
+    let nextWhen = 0; // running audio-clock cursor: the next buffer starts exactly here
     let anchored = false;
     try {
       for await (const { buffer, timestamp, duration } of iter) {
@@ -181,22 +182,23 @@ class SyncedAudio {
 
         const rate = this.video.playbackRate || 1;
         if (!anchored) {
-          // Map so media-time = the live video position plays now (+ a small lead), i.e.
-          // audio stays in sync with the video rather than lagging by the buffer offset.
+          // Anchor: the live video position plays now (+ a small lead), so audio stays in
+          // sync. From here buffers are laid down back-to-back from the nextWhen cursor -
+          // sample-accurate, so there is no gap or overlap (and no click) between them.
           anchorCtx = this.ctx.currentTime + LEAD_IN;
           anchorMedia = this.video.currentTime;
+          nextWhen = anchorCtx;
           anchored = true;
         }
-        const when = anchorCtx + (timestamp - anchorMedia) / rate;
 
-        // Backpressure: keep at most LOOKAHEAD scheduled ahead of the audio clock.
-        while (when > this.ctx.currentTime + LOOKAHEAD && token === this.token && !this.disposed) {
+        // Backpressure: keep at most LOOKAHEAD of audio scheduled ahead of the clock.
+        while (nextWhen > this.ctx.currentTime + LOOKAHEAD && token === this.token && !this.disposed) {
           await sleep(80);
         }
         if (token !== this.token || this.disposed) return;
 
-        // Drift: if the audio's media position has slipped from the video clock (the two
-        // clocks tick slightly differently, or a pause/resume nudged them), re-anchor.
+        // Drift: re-anchor only on a large desync (the two clocks tick slightly
+        // differently over time); momentary video stutters are tolerated so audio is smooth.
         if (!this.video.paused && this.ctx.state === "running") {
           const audioMediaNow = anchorMedia + (this.ctx.currentTime - anchorCtx) * rate;
           if (Math.abs(audioMediaNow - this.video.currentTime) > DRIFT_MAX) {
@@ -204,7 +206,10 @@ class SyncedAudio {
             return;
           }
         }
-        if (when < this.ctx.currentTime - duration) continue; // wholly in the past, skip
+
+        // If the cursor fell behind the clock (decode starved, rare), snap it up to now
+        // instead of scheduling in the past. Otherwise buffers abut exactly.
+        if (nextWhen < this.ctx.currentTime) nextWhen = this.ctx.currentTime;
 
         const node = this.ctx.createBufferSource();
         node.buffer = buffer;
@@ -212,10 +217,11 @@ class SyncedAudio {
         node.connect(this.gain);
         node.onended = () => this.active.delete(node);
         try {
-          node.start(Math.max(when, this.ctx.currentTime));
+          node.start(nextWhen);
         } catch {
           continue;
         }
+        nextWhen += duration / rate;
         this.active.add(node);
         if (++scheduled === 1) {
           this.reseeks = 0;
