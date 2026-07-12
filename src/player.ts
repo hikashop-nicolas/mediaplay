@@ -664,7 +664,10 @@ class MediaPlayer implements MediaPlayerHandle {
             // silent with no error event. For AC-3/E-AC-3 we can decode it ourselves
             // (libav) and play it in sync with the muted video; other codecs (DTS,
             // TrueHD) aren't in the decoder, so we just tell the user.
-            const activeCodec = audioTracks[activeAudio]?.codec;
+            const activeCodec = audioTracks[activeAudio]?.codec ?? "";
+            const probeMime = activeCodec ? AUDIO_PROBE[activeCodec.toUpperCase()] : undefined;
+            const canPlay = probeMime ? m.canPlayType(probeMime) : "n/a";
+            console.info(`[mediaplay:audio] codec=${activeCodec} probe=${probeMime ?? "-"} canPlayType=${JSON.stringify(canPlay)}`);
             if (activeCodec && browserLacksAudioCodec(activeCodec, m)) {
               if (/^A_E?AC3$/i.test(activeCodec)) void this.startDecodedAudio(m, activeAudio, showToast);
               else showToast(S.mediaAudioUnsupported);
@@ -697,16 +700,19 @@ class MediaPlayer implements MediaPlayerHandle {
   private async startDecodedAudio(video: HTMLMediaElement, audioIndex: number, showToast: (text: string) => void): Promise<void> {
     const base = this.opts.libav?.base ?? new URL("libav/", document.baseURI).toString();
     video.muted = true; // the native track is silent (undecodable) anyway; also eases autoplay
+    console.info(`[mediaplay:audio] decoding via libav; base=${base}`);
     try {
       const { playSyncedAudio } = await import("./synced-audio");
       const handle = await playSyncedAudio(video, this.bytes!, audioIndex, base);
+      console.info(`[mediaplay:audio] playSyncedAudio ->`, handle === "undecodable" ? "undecodable" : handle ? "playing" : "no track");
       if (!this.wrap) {
         if (handle && handle !== "undecodable") handle.destroy();
         return;
       }
       if (handle && handle !== "undecodable") this.decodedAudio = handle;
       else showToast(this.S.mediaAudioUnsupported);
-    } catch {
+    } catch (e) {
+      console.warn("[mediaplay:audio] decode path failed:", e);
       if (this.wrap) showToast(this.S.mediaAudioUnsupported);
     }
   }

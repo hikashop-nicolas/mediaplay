@@ -24,6 +24,7 @@ class SyncedAudio {
   private readonly active = new Set<AudioBufferSourceNode>();
   private disposed = false;
   private readonly listeners: [string, EventListener][] = [];
+  private readonly cleanups: (() => void)[] = [];
 
   constructor(
     private readonly video: HTMLMediaElement,
@@ -49,6 +50,19 @@ class SyncedAudio {
     });
     on("seeked", () => this.restart());
     on("ratechange", () => this.restart());
+
+    // The context is created after async work (demux/probe), so it's outside the
+    // original user gesture and starts "suspended"; browsers then block resume() until
+    // the next interaction. Resume on any gesture until it's actually running.
+    const tryResume = () => {
+      void this.ctx.resume();
+      if (this.ctx.state === "running" || this.disposed) removeGesture();
+    };
+    const gestures = ["pointerdown", "keydown", "touchstart"];
+    const removeGesture = () => gestures.forEach((ev) => document.removeEventListener(ev, tryResume));
+    gestures.forEach((ev) => document.addEventListener(ev, tryResume, { passive: true }));
+    this.cleanups.push(removeGesture);
+    console.info(`[mediaplay:audio] AudioContext state=${this.ctx.state}, sampleRate=${this.ctx.sampleRate}`);
   }
 
   start(): void {
@@ -81,6 +95,7 @@ class SyncedAudio {
         /* needs a user gesture; the next play will resume */
       }
     }
+    let scheduled = 0;
     try {
       for await (const { buffer, timestamp, duration } of this.sink.buffers(fromTime)) {
         // Backpressure: hold until the video clock is within LOOKAHEAD of this buffer
@@ -112,9 +127,10 @@ class SyncedAudio {
           continue;
         }
         this.active.add(node);
+        if (++scheduled === 1) console.info(`[mediaplay:audio] scheduling audio (ctx=${this.ctx.state}, first buffer @${timestamp.toFixed(2)}s)`);
       }
-    } catch {
-      // Decode error / end of stream: stop scheduling for this run.
+    } catch (e) {
+      console.warn("[mediaplay:audio] scheduling stopped:", e);
     }
   }
 
@@ -124,6 +140,8 @@ class SyncedAudio {
     this.stopActive();
     for (const [ev, fn] of this.listeners) this.video.removeEventListener(ev, fn);
     this.listeners.length = 0;
+    for (const fn of this.cleanups) fn();
+    this.cleanups.length = 0;
     try {
       void this.ctx.close();
     } catch {
@@ -153,17 +171,22 @@ export async function playSyncedAudio(
     const audioTracks = tracks.filter((t) => t.isAudioTrack());
     const track = audioTracks[audioIndex] ?? audioTracks[0];
     if (!track) return null;
+    console.info(`[mediaplay:audio] track ${audioIndex} codec=${track.codec}; probing decode...`);
     // Probe: pull the first decoded buffer. If the decoder can't handle it, this rejects.
     const probe = new AudioBufferSink(track);
     const firstIter = probe.buffers(0)[Symbol.asyncIterator]();
     const first = await firstIter.next();
     void firstIter.return?.();
-    if (first.done || !first.value) return "undecodable";
-
+    if (first.done || !first.value) {
+      console.warn("[mediaplay:audio] probe produced no buffer");
+      return "undecodable";
+    }
+    console.info(`[mediaplay:audio] probe ok (first buffer @${first.value.timestamp.toFixed(2)}s); starting sync engine`);
     const engine = new SyncedAudio(video, track);
     engine.start();
     return { destroy: () => engine.destroy() };
-  } catch {
+  } catch (e) {
+    console.warn("[mediaplay:audio] playSyncedAudio failed:", e);
     return "undecodable";
   }
 }
