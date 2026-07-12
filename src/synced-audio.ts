@@ -12,7 +12,10 @@ import { setLibavBase, registerAc3Decoder } from "./libav-decoder";
 
 const LOOKAHEAD = 1.5; // seconds of audio to keep scheduled ahead (survives main-thread stalls)
 const LEAD_IN = 0.05; // small audio-clock headroom at anchor (also the residual A/V offset)
-const DRIFT_MAX = 0.3; // re-anchor if audio drifts more than this from the video clock
+// Re-anchor only on a LARGE desync (a real problem), not momentary video hitches. When
+// the video stutters (e.g. a busy main thread), re-anchoring would gap the audio; instead
+// let it keep playing from its buffer and re-align as the video recovers.
+const DRIFT_MAX = 1.0;
 const sleep = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms));
 
 export interface SyncedAudioHandle {
