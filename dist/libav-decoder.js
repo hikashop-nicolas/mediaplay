@@ -20,13 +20,32 @@ function loadLibav() {
     if (!libavPromise) {
         if (!libavBase)
             throw new Error("mediaplay: libav asset base not set");
-        const url = new URL(LIBAV_LOADER, libavBase).href;
         // noworker: run the decoder on the calling thread. In worker mode every per-packet
         // ff_decode_multi is a postMessage round-trip, which drags throughput below realtime;
         // direct calls decode at ~80x realtime (measured), easily keeping ahead of playback.
-        libavPromise = import(/* @vite-ignore */ url).then((factory) => factory.LibAV({ base: libavBase, noworker: true }));
+        libavPromise = importLibavLoader()
+            .then((factory) => factory.LibAV({ base: libavBase, noworker: true }))
+            .catch((e) => {
+            // Don't cache the failure. A single failed dynamic import (e.g. a transient hiccup
+            // or a Vite dep re-optimize race in dev) would otherwise poison libavPromise and
+            // disable AC-3/E-AC-3 audio for the whole page session; clearing it allows a retry.
+            libavPromise = null;
+            throw e;
+        });
     }
     return libavPromise;
+}
+/** Import the libav loader module, retrying past a poisoned module-map entry. The browser
+ *  caches a failed dynamic import for the exact URL for the page's lifetime, so a plain
+ *  retry returns the same rejection; a unique query string bypasses the cached failure. */
+async function importLibavLoader() {
+    const url = new URL(LIBAV_LOADER, libavBase).href;
+    try {
+        return await import(/* @vite-ignore */ url);
+    }
+    catch {
+        return await import(/* @vite-ignore */ `${url}${url.includes("?") ? "&" : "?"}retry=${Date.now()}`);
+    }
 }
 class LibavAc3Decoder extends CustomAudioDecoder {
     libav = null;
