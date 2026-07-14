@@ -16,7 +16,7 @@ export {
   type LibassAssets,
 } from "./player";
 export { setLocale, strings, type MediaStrings } from "./i18n";
-export { extractWaveformPeaks, type WaveformPeaks } from "./synced-audio";
+export { extractWaveformPeaks, decodeAudioToMono16k, type WaveformPeaks } from "./synced-audio";
 export {
   extractMkvInfo,
   extractMkvSubtitles,

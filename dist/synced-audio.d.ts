@@ -31,3 +31,16 @@ export declare function extractWaveformPeaks(bytes: Uint8Array, opts?: {
     onProgress?: (ratio: number) => void;
     durationHint?: number;
 }): Promise<WaveformPeaks | null>;
+/**
+ * Decode a file's audio track to 16 kHz mono PCM (what speech recognisers like Whisper expect),
+ * streaming from a Blob on disk. Unlike the browser's decodeAudioData this goes through
+ * mediabunny + the registered AC-3/E-AC-3 decoder, so it handles Matroska containers and Dolby
+ * audio the browser can't decode. Downmixes to mono per chunk and resamples to 16 kHz at the end.
+ */
+export declare function decodeAudioToMono16k(blob: Blob, opts?: {
+    base?: string;
+    audioIndex?: number;
+    signal?: AbortSignal;
+    onProgress?: (ratio: number) => void;
+    durationHint?: number;
+}): Promise<Float32Array>;

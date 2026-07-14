@@ -10,5 +10,5 @@
 // The subtitle helpers are re-exported so they can be used headlessly (no player).
 export { createMediaPlayer, } from "./player";
 export { setLocale, strings } from "./i18n";
-export { extractWaveformPeaks } from "./synced-audio";
+export { extractWaveformPeaks, decodeAudioToMono16k } from "./synced-audio";
 export { extractMkvInfo, extractMkvSubtitles, subtitleFileToVtt, decodeSubtitleBytes, srtToVtt, assFileToVtt, } from "./mkv";

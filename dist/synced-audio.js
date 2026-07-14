@@ -517,3 +517,66 @@ export async function extractWaveformPeaks(bytes, opts = {}) {
         out[i] = peaks[i] ?? 0;
     return { peaks: out, peaksPerSec };
 }
+/**
+ * Decode a file's audio track to 16 kHz mono PCM (what speech recognisers like Whisper expect),
+ * streaming from a Blob on disk. Unlike the browser's decodeAudioData this goes through
+ * mediabunny + the registered AC-3/E-AC-3 decoder, so it handles Matroska containers and Dolby
+ * audio the browser can't decode. Downmixes to mono per chunk and resamples to 16 kHz at the end.
+ */
+export async function decodeAudioToMono16k(blob, opts = {}) {
+    const base = opts.base ?? new URL("libav/", document.baseURI).toString();
+    setLibavBase(base);
+    registerAc3Decoder();
+    const input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS });
+    const audioTracks = (await input.getTracks()).filter((t) => t.isAudioTrack());
+    const track = audioTracks[opts.audioIndex ?? 0] ?? audioTracks[0];
+    if (!track)
+        throw new Error("no audio track to transcribe");
+    const source = mediabunnySource(track);
+    const ctx = new AudioContext();
+    const monoChunks = [];
+    let total = 0;
+    let srcRate = 0;
+    try {
+        for await (const { buffer, timestamp } of source.buffers(0, ctx)) {
+            if (opts.signal?.aborted)
+                throw new Error("aborted");
+            srcRate = buffer.sampleRate || 48000;
+            const nch = buffer.numberOfChannels;
+            const len = buffer.length;
+            const mono = new Float32Array(len);
+            for (let c = 0; c < nch; c += 1) {
+                const ch = buffer.getChannelData(c);
+                for (let i = 0; i < len; i += 1)
+                    mono[i] += ch[i] / nch;
+            }
+            monoChunks.push(mono);
+            total += len;
+            if (opts.onProgress && opts.durationHint)
+                opts.onProgress(Math.min(1, timestamp / opts.durationHint));
+        }
+    }
+    finally {
+        void ctx.close();
+    }
+    if (!total)
+        throw new Error("audio track produced no samples");
+    const full = new Float32Array(total);
+    let o = 0;
+    for (const m of monoChunks) {
+        full.set(m, o);
+        o += m.length;
+    }
+    if (srcRate === 16000)
+        return full;
+    // Resample to 16 kHz through an OfflineAudioContext (linear interpolation is plenty for ASR).
+    const srcBuf = new AudioBuffer({ length: total, sampleRate: srcRate, numberOfChannels: 1 });
+    srcBuf.copyToChannel(full, 0);
+    const frames = Math.max(1, Math.ceil((total / srcRate) * 16000));
+    const off = new OfflineAudioContext(1, frames, 16000);
+    const node = off.createBufferSource();
+    node.buffer = srcBuf;
+    node.connect(off.destination);
+    node.start();
+    return (await off.startRendering()).getChannelData(0).slice();
+}
