@@ -7,9 +7,9 @@
 // relative to the LIVE video.currentTime, so the stream is self-correcting: any small
 // offset introduced by a transition is absorbed within a few (32 ms) buffers.
 
-import { Input, ALL_FORMATS, BufferSource, AudioBufferSink, type InputAudioTrack } from "mediabunny";
+import { Input, ALL_FORMATS, BufferSource, BlobSource, AudioBufferSink, type InputAudioTrack } from "mediabunny";
 import { setLibavBase, registerAc3Decoder, createDirectAudioDecoder, MKV_LIBAV_CODECS, type DirectFrame } from "./libav-decoder";
-import { readAudioPackets, extractMkvInfo, type MkvInfo } from "./mkv";
+import { readAudioPackets, readAudioPacketsFromBlob, extractMkvInfo, type MkvInfo } from "./mkv";
 
 const LOOKAHEAD = 1.5; // seconds of audio to keep scheduled ahead (survives main-thread stalls)
 const LEAD_IN = 0.05; // small audio-clock headroom at anchor (also the residual A/V offset)
@@ -299,7 +299,7 @@ function mediabunnySource(track: InputAudioTrack): AudioChunkSource {
  * decode them in batches, and coalesce the small decoded frames (TrueHD frames are
  * under 1 ms) into ~85 ms AudioBuffers so the scheduler isn't flooded with nodes.
  */
-function mkvDirectSource(bytes: Uint8Array, trackNumber: number, ffCodec: string, base: string, info: MkvInfo): AudioChunkSource {
+function mkvDirectSource(src: Uint8Array | Blob, trackNumber: number, ffCodec: string, base: string, info: MkvInfo): AudioChunkSource {
   const CHUNK = 4096; // min samples per emitted AudioBuffer
   const BATCH = 16; // encoded packets per decode call
   return {
@@ -348,8 +348,8 @@ function mkvDirectSource(bytes: Uint8Array, trackNumber: number, ffCodec: string
         };
         let batch: Uint8Array[] = [];
         let batchTs = 0;
-        const packets = readAudioPackets(bytes, trackNumber, fromTime * 1000, info);
-        for (const pkt of packets) {
+        const packets = src instanceof Blob ? readAudioPacketsFromBlob(src, trackNumber, fromTime * 1000, info) : readAudioPackets(src, trackNumber, fromTime * 1000, info);
+        for await (const pkt of packets) {
           if (!batch.length) batchTs = pkt.tsMs / 1000;
           batch.push(pkt.data);
           if (batch.length < BATCH) continue;
@@ -409,7 +409,7 @@ function stopCurrentEngine(): void {
 
 export async function playSyncedAudio(
   video: HTMLMediaElement,
-  bytes: Uint8Array,
+  blob: Blob,
   audioIndex: number,
   base: string,
   direct?: DirectAudioInfo,
@@ -422,12 +422,13 @@ export async function playSyncedAudio(
     let source: AudioChunkSource;
     const ffCodec = direct ? MKV_LIBAV_CODECS[direct.mkvCodec.toUpperCase()] : undefined;
     if (direct && ffCodec && !/^A_E?AC3$/i.test(direct.mkvCodec)) {
-      // DTS / TrueHD / MLP: our own EBML packet reader feeds libav directly.
+      // DTS / TrueHD / MLP: our own EBML packet reader feeds libav directly (streamed cluster by
+      // cluster from the Blob, so a multi-GB file isn't held in RAM).
       if (!direct.info.clusters.length) return "undecodable";
-      source = mkvDirectSource(bytes, direct.mkvTrackNumber, ffCodec, base, direct.info);
+      source = mkvDirectSource(blob, direct.mkvTrackNumber, ffCodec, base, direct.info);
     } else {
-      // Pass the view directly (no copy): the file can be very large.
-      const input = new Input({ source: new BufferSource(bytes), formats: ALL_FORMATS });
+      // BlobSource reads the file on demand from disk (no full copy in RAM).
+      const input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS });
       const tracks = await input.getTracks();
       const audioTracks = tracks.filter((t) => t.isAudioTrack());
       const track = audioTracks[audioIndex] ?? audioTracks[0];

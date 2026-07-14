@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assFileToVtt, decodeSubtitleBytes, extractMkvInfo, extractMkvSubtitles, readAudioPackets, srtToVtt } from "./mkv";
+import { assFileToVtt, decodeSubtitleBytes, extractMkvInfo, extractMkvSubtitles, readAudioPackets, readAudioPacketsFromBlob, srtToVtt } from "./mkv";
 
 // Hand-built EBML fixtures: enough Matroska structure for the extractor
 // (EBML header, Segment > Info/Tracks/Cluster with subtitle blocks).
@@ -282,6 +282,21 @@ describe("readAudioPackets", () => {
     const info = extractMkvInfo(bytes);
     return Array.from(readAudioPackets(bytes, track, fromMs, info)).map((p) => ({ tsMs: p.tsMs, data: Array.from(p.data) }));
   };
+  const collectBlob = async (bytes: Uint8Array, track: number, fromMs: number) => {
+    const info = extractMkvInfo(bytes);
+    const out: { tsMs: number; data: number[] }[] = [];
+    for await (const p of readAudioPacketsFromBlob(new Blob([bytes as BlobPart]), track, fromMs, info)) out.push({ tsMs: p.tsMs, data: Array.from(p.data) });
+    return out;
+  };
+
+  it("streams the same packets from a Blob as it reads from bytes, across clusters", async () => {
+    const c1 = el(0x1f43b675, [...el(0xe7, uintPayload(1000)), ...el(0xa3, [...head(2, 40, 0), 9, 8, 7])]);
+    const c2 = el(0x1f43b675, [...el(0xe7, uintPayload(2000)), ...el(0xa3, [...head(2, 10, 0), 1, 2])]);
+    const bytes = mkv({ tracks: audioTrack(2), clusters: [...c1, ...c2] });
+    expect(await collectBlob(bytes, 2, 0)).toEqual(collect(bytes, 2, 0));
+    // and seeking mid-file starts at the right cluster
+    expect(await collectBlob(bytes, 2, 1500)).toEqual(collect(bytes, 2, 1500));
+  });
 
   it("yields unlaced SimpleBlock frames with cluster+relative time", () => {
     const cluster = el(0x1f43b675, [...el(0xe7, uintPayload(1000)), ...el(0xa3, [...head(2, 40, 0), 9, 8, 7])]);

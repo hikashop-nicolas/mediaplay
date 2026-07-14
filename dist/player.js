@@ -133,7 +133,6 @@ class MediaPlayer {
     url = null;
     srcBlob = null; // disk-backed source for playback/remux (no full copy in RAM)
     eagerBytes = null; // set only when the caller passed bytes directly
-    materialized = null; // buffer read from srcBlob on demand, cached
     media = null;
     applyLiveSubtitle = null;
     onDocKey = null;
@@ -764,7 +763,9 @@ class MediaPlayer {
             void video.play().catch(() => undefined);
         try {
             const { playSyncedAudio } = await import("./synced-audio");
-            const handle = await playSyncedAudio(video, await this.buffer(), audioIndex, base, direct);
+            if (!this.srcBlob)
+                return;
+            const handle = await playSyncedAudio(video, this.srcBlob, audioIndex, base, direct);
             if (!this.wrap) {
                 if (handle && handle !== "undecodable")
                     handle.destroy();
@@ -781,21 +782,19 @@ class MediaPlayer {
                 showToast(this.S.mediaAudioUnsupported);
         }
     }
-    /** The whole file as bytes, read from the source Blob on first use and cached. Used only by
-     * the paths that still need random access to a buffer (info/subtitle/font extraction and, for
-     * now, the AC-3/E-AC-3 audio reader). Everything else reads the Blob on demand. */
+    /** Read the whole file into a TRANSIENT buffer (not cached), for the paths that still need
+     * random access: the one-time info/subtitle/font extraction (buffer freed right after), and,
+     * until it's streamed, the AC-3/E-AC-3 audio reader (which holds it only while that audio
+     * plays). Not caching is what keeps the file out of RAM during normal editing. */
     async buffer() {
         if (this.eagerBytes)
             return this.eagerBytes;
-        if (!this.materialized) {
-            if (!this.srcBlob)
-                return new Uint8Array(0);
-            this.materialized = new Uint8Array(await this.srcBlob.arrayBuffer());
-        }
-        return this.materialized;
+        if (!this.srcBlob)
+            return new Uint8Array(0);
+        return new Uint8Array(await this.srcBlob.arrayBuffer());
     }
     getBytes() {
-        return this.eagerBytes ?? this.materialized ?? undefined;
+        return this.eagerBytes ?? undefined;
     }
     getMediaElement() {
         return this.media ?? undefined;

@@ -11,7 +11,7 @@ export interface DirectAudioInfo {
     /** The parse result of extractMkvInfo (cluster index + timestamp scale). */
     info: MkvInfo;
 }
-export declare function playSyncedAudio(video: HTMLMediaElement, bytes: Uint8Array, audioIndex: number, base: string, direct?: DirectAudioInfo): Promise<SyncedAudioHandle | "undecodable" | null>;
+export declare function playSyncedAudio(video: HTMLMediaElement, blob: Blob, audioIndex: number, base: string, direct?: DirectAudioInfo): Promise<SyncedAudioHandle | "undecodable" | null>;
 export interface WaveformPeaks {
     peaks: Float32Array;
     peaksPerSec: number;

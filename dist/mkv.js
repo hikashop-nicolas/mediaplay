@@ -646,3 +646,96 @@ export function* readAudioPackets(bytes, trackNumber, fromMs, info) {
         // Truncated or malformed tail: end the stream with what we have.
     }
 }
+/** Streaming variant of readAudioPackets: reads the file ONE CLUSTER AT A TIME from a Blob
+ * (using the cluster index in `info`) instead of holding the whole file in memory. Yields the
+ * same packets; each block's `data` is a view into that cluster's buffer, which stays alive only
+ * until the generator advances to the next cluster. Used for AC-3/E-AC-3 playback so a multi-GB
+ * file isn't kept in RAM. */
+export async function* readAudioPacketsFromBlob(blob, trackNumber, fromMs, info) {
+    if (!info.clusters.length)
+        return;
+    let startIdx = 0;
+    for (let i = 0; i < info.clusters.length; i++) {
+        if (info.clusters[i].timeMs <= fromMs)
+            startIdx = i;
+        else
+            break;
+    }
+    for (let ci = startIdx; ci < info.clusters.length; ci++) {
+        const begin = info.clusters[ci].offset;
+        const end = ci + 1 < info.clusters.length ? info.clusters[ci + 1].offset : blob.size;
+        let buf;
+        try {
+            buf = new Uint8Array(await blob.slice(begin, end).arrayBuffer());
+        }
+        catch {
+            return;
+        }
+        const r = new Reader(buf);
+        let clusterEnd;
+        try {
+            const id = r.readId();
+            const size = r.readSize();
+            if (id !== ID_CLUSTER)
+                continue;
+            clusterEnd = size == null ? buf.length : Math.min(buf.length, r.pos + size);
+        }
+        catch {
+            continue;
+        }
+        let clusterTs = 0;
+        try {
+            while (r.pos < clusterEnd) {
+                const cid = r.readId();
+                const csize = r.readSize();
+                if (csize == null)
+                    break;
+                let bStart = -1;
+                let bSize = 0;
+                if (cid === ID_CLUSTER_TIMESTAMP) {
+                    clusterTs = r.uint(csize);
+                    r.pos += csize;
+                    continue;
+                }
+                else if (cid === ID_SIMPLE_BLOCK) {
+                    bStart = r.pos;
+                    bSize = csize;
+                    r.pos += csize;
+                }
+                else if (cid === ID_BLOCK_GROUP) {
+                    const gEnd = r.pos + csize;
+                    while (r.pos < gEnd) {
+                        const gid = r.readId();
+                        const gsize = r.readSize();
+                        if (gsize == null)
+                            break;
+                        if (gid === ID_BLOCK) {
+                            bStart = r.pos;
+                            bSize = gsize;
+                        }
+                        r.pos += gsize;
+                    }
+                }
+                else {
+                    r.pos += csize;
+                    continue;
+                }
+                if (bStart < 0)
+                    continue;
+                const blk = parseBlockFrames(buf, bStart, bSize);
+                if (!blk || blk.track !== trackNumber)
+                    continue;
+                const tsMs = ((clusterTs + blk.relTime) * info.timestampScale) / 1e6;
+                if (tsMs < fromMs - 100)
+                    continue;
+                for (const [off, len] of blk.frames) {
+                    if (len > 0 && off + len <= buf.length)
+                        yield { tsMs, data: buf.subarray(off, off + len) };
+                }
+            }
+        }
+        catch {
+            // malformed cluster: skip to the next one
+        }
+    }
+}

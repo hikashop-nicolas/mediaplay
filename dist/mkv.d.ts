@@ -61,3 +61,9 @@ export declare function extractMkvInfo(bytes: Uint8Array): MkvInfo;
  * expected to smooth per-frame times within a laced block.
  */
 export declare function readAudioPackets(bytes: Uint8Array, trackNumber: number, fromMs: number, info: MkvInfo): Generator<MkvAudioPacket>;
+/** Streaming variant of readAudioPackets: reads the file ONE CLUSTER AT A TIME from a Blob
+ * (using the cluster index in `info`) instead of holding the whole file in memory. Yields the
+ * same packets; each block's `data` is a view into that cluster's buffer, which stays alive only
+ * until the generator advances to the next cluster. Used for AC-3/E-AC-3 playback so a multi-GB
+ * file isn't kept in RAM. */
+export declare function readAudioPacketsFromBlob(blob: Blob, trackNumber: number, fromMs: number, info: MkvInfo): AsyncGenerator<MkvAudioPacket>;
