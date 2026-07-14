@@ -1,9 +1,11 @@
 # mediaplay
 
 A standalone, framework-agnostic, client-side **audio / video player** for the browser.
-It plays a file's raw bytes in a `<video>` / `<audio>` element and, when the browser
-can't play them directly, **remuxes in memory** ([mediabunny](https://mediabunny.dev/))
-into a container it accepts, **without re-encoding**, so the file's data stays untouched.
+Give it a `File`/`Blob` and it plays from disk, streaming the media on demand so a
+multi-GB file never sits in RAM. When the browser can't play the file directly, it
+**remuxes** ([mediabunny](https://mediabunny.dev/)) into a container it accepts,
+**without re-encoding**, reading the source from disk as it goes, so the file's data
+stays untouched.
 Audio codecs the browser can't decode at all (**Dolby AC-3 / E-AC-3**) are decoded by a
 bundled FFmpeg WASM decoder and played through Web Audio in sync with the video.
 Embedded and external **subtitles** (SRT / ASS / SSA / VTT) are extracted and rendered,
@@ -16,7 +18,7 @@ import { createMediaPlayer } from "mediaplay";
 
 const handle = createMediaPlayer(
   containerEl,
-  { bytes: fileBytes, mime: "video/mp4", filename: "clip.mp4" },
+  { blob: file, mime: file.type, filename: file.name }, // a File/Blob streams from disk
   { onError: (msg) => console.warn(msg) },
 );
 
@@ -27,8 +29,9 @@ handle.destroy();
 
 ## What it does
 
-- **Plays the bytes as-is** through a blob URL, using whatever codecs the platform
-  supports. Only the file you open is touched; the player is read-only.
+- **Plays from disk** through a blob URL, using whatever codecs the platform supports.
+  The `File`/`Blob` is read on demand (playback, remux, seeking, extraction), so the whole
+  file is never held in memory. Only the file you open is touched; the player is read-only.
 - **Falls back by remuxing** (stream copy where possible, WebCodecs transcode where the
   platform can decode but not stream-copy) into MP4 / WebM / OGG / WAV when direct
   playback fails, all in memory. If that also fails, a clear "not supported" message shows.
@@ -116,9 +119,10 @@ assets, AC-3/E-AC-3 files play video-only with an "audio codec unsupported" noti
 ## API
 
 - `createMediaPlayer(container, source, options?) => MediaPlayerHandle`
-  - `source: { bytes: Uint8Array; mime?: string; filename?: string }`
-  - `options: { onError?; strings?; libass?: { workerUrl?, fontUrl?, fonts? }; libav?: { base? } }`
-  - `handle: { getBytes(); focus(); destroy() }`
+  - `source: { blob?: Blob; bytes?: Uint8Array; mime?: string; filename?: string }` — pass a
+    `blob` (a `File`, streamed from disk) or `bytes` (already in memory); one or the other.
+  - `options: { onError?; strings?; libass?: { workerUrl?, fontUrl?, fonts? }; libav?: { base? }; embedded? }`
+  - `handle: { getMediaElement(); setSubtitleText(content, filename); getBytes(); focus(); destroy() }`
 - `setLocale(code)` / `strings(override?)` — built-in i18n (English, French, Japanese);
   a host with its own translations passes `options.strings` to override individual labels.
 - Subtitle helpers, usable headlessly: `extractMkvInfo`, `extractMkvSubtitles`,
