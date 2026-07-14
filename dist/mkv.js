@@ -1,0 +1,648 @@
+// Minimal Matroska/WebM subtitle extractor. The <video> element ignores subtitle
+// tracks embedded in the container, so we walk the EBML structure ourselves, collect
+// the text-subtitle blocks (S_TEXT/UTF8 = SRT, S_TEXT/ASS|SSA, S_TEXT/WEBVTT) and
+// rebuild each track as a standalone WebVTT file to attach via <track>. Bitmap
+// subtitles (VobSub, PGS) have no text to extract and are skipped.
+// Element IDs (including their length-marker bits, as stored in the file).
+const ID_EBML = 0x1a45dfa3;
+const ID_SEGMENT = 0x18538067;
+const ID_INFO = 0x1549a966;
+const ID_TIMESTAMP_SCALE = 0x2ad7b1;
+const ID_TRACKS = 0x1654ae6b;
+const ID_TRACK_ENTRY = 0xae;
+const ID_TRACK_NUMBER = 0xd7;
+const ID_TRACK_TYPE = 0x83;
+const ID_CODEC_ID = 0x86;
+const ID_NAME = 0x536e;
+const ID_LANGUAGE = 0x22b59c;
+const ID_LANGUAGE_BCP47 = 0x22b59d;
+const ID_CODEC_PRIVATE = 0x63a2;
+const ID_ATTACHMENTS = 0x1941a469;
+const ID_ATTACHED_FILE = 0x61a7;
+const ID_FILE_NAME = 0x466e;
+const ID_FILE_MIME = 0x4660;
+const ID_FILE_DATA = 0x465c;
+const ID_CLUSTER = 0x1f43b675;
+const ID_CLUSTER_TIMESTAMP = 0xe7;
+const ID_SIMPLE_BLOCK = 0xa3;
+const ID_BLOCK_GROUP = 0xa0;
+const ID_BLOCK = 0xa1;
+const ID_BLOCK_DURATION = 0x9b;
+// Segment-level children: an unknown-size Cluster ends when one of these appears.
+const SEGMENT_CHILDREN = new Set([ID_INFO, ID_TRACKS, ID_CLUSTER, 0x114d9b74, 0x1c53bb6b, 0x1043a770, 0x1941a469, 0x1254c367]);
+class Reader {
+    b;
+    pos = 0;
+    constructor(b) {
+        this.b = b;
+    }
+    get length() {
+        return this.b.length;
+    }
+    /** EBML element ID: length-marker bits kept, 1-4 bytes. */
+    readId() {
+        const first = this.b[this.pos];
+        const len = first >= 0x80 ? 1 : first >= 0x40 ? 2 : first >= 0x20 ? 3 : first >= 0x10 ? 4 : 0;
+        if (!len || this.pos + len > this.b.length)
+            throw new Error("bad id");
+        let id = 0;
+        for (let i = 0; i < len; i++)
+            id = id * 256 + this.b[this.pos + i];
+        this.pos += len;
+        return id;
+    }
+    /** EBML size: length-marker bits stripped; null = unknown size. */
+    readSize() {
+        const first = this.b[this.pos];
+        let len = 1;
+        for (let mask = 0x80; mask && !(first & mask); mask >>= 1)
+            len++;
+        if (len > 8 || this.pos + len > this.b.length)
+            throw new Error("bad size");
+        let v = first & (0xff >> len);
+        let allOnes = v === 0xff >> len;
+        for (let i = 1; i < len; i++) {
+            const byte = this.b[this.pos + i];
+            v = v * 256 + byte;
+            if (byte !== 0xff)
+                allOnes = false;
+        }
+        this.pos += len;
+        return allOnes ? null : v;
+    }
+    uint(size) {
+        let v = 0;
+        for (let i = 0; i < size; i++)
+            v = v * 256 + this.b[this.pos + i];
+        return v;
+    }
+    bytes(size) {
+        return this.b.subarray(this.pos, this.pos + size);
+    }
+    peekId() {
+        const save = this.pos;
+        try {
+            const id = this.readId();
+            this.pos = save;
+            return id;
+        }
+        catch {
+            this.pos = save;
+            return null;
+        }
+    }
+    /** EBML SIGNED vint (EBML-lacing size deltas): unsigned vint minus the length bias. */
+    readSignedVint() {
+        const first = this.b[this.pos];
+        let len = 1;
+        for (let mask = 0x80; mask && !(first & mask); mask >>= 1)
+            len++;
+        if (len > 8 || this.pos + len > this.b.length)
+            return null;
+        let v = first & (0xff >> len);
+        for (let i = 1; i < len; i++)
+            v = v * 256 + this.b[this.pos + i];
+        this.pos += len;
+        return v - (2 ** (7 * len - 1) - 1);
+    }
+}
+const utf8 = new TextDecoder("utf-8", { fatal: false });
+/** ASS/SSA event line -> plain cue text (9th comma field onward, tags stripped). */
+function assText(payload) {
+    const parts = payload.split(",");
+    if (parts.length < 9)
+        return payload;
+    return parts
+        .slice(8)
+        .join(",")
+        .replace(/\{[^}]*\}/g, "")
+        .replace(/\\N/gi, "\n")
+        .replace(/\\h/g, " ")
+        .trim();
+}
+/** WebVTT-in-Matroska block: "id\nsettings\ntext" per the mapping; keep the text part. */
+function webvttText(payload) {
+    const lines = payload.split("\n");
+    return (lines.length >= 3 ? lines.slice(2) : lines.slice(lines.length > 1 ? 1 : 0)).join("\n").trim();
+}
+function fmtTime(ms) {
+    const h = Math.floor(ms / 3600000);
+    const m = Math.floor((ms % 3600000) / 60000);
+    const s = Math.floor((ms % 60000) / 1000);
+    const f = Math.floor(ms % 1000);
+    const p = (n, w) => String(n).padStart(w, "0");
+    return `${p(h, 2)}:${p(m, 2)}:${p(s, 2)}.${p(f, 3)}`;
+}
+function buildVtt(cues) {
+    const parts = ["WEBVTT"];
+    for (const c of cues) {
+        const text = c.text.replace(/-->/g, "→");
+        if (!text)
+            continue;
+        parts.push(`${fmtTime(c.start)} --> ${fmtTime(c.end)}\n${text}`);
+    }
+    return parts.join("\n\n") + "\n";
+}
+export function extractMkvSubtitles(bytes) {
+    return extractMkvInfo(bytes).subtitles;
+}
+// --- external subtitle files (.srt / .ass / .ssa / .vtt) ----------------------
+/**
+ * Decode subtitle-file bytes to text. Subtitle files in the wild are often not
+ * UTF-8 (Shift_JIS, GBK, EUC-KR, Windows-1252 are common); try strict decoders
+ * in order and fall back to permissive Windows-1252, which never fails.
+ */
+export function decodeSubtitleBytes(bytes) {
+    for (const enc of ["utf-8", "shift_jis", "euc-kr", "gb18030"]) {
+        try {
+            return new TextDecoder(enc, { fatal: true }).decode(bytes);
+        }
+        catch {
+            /* next */
+        }
+    }
+    return new TextDecoder("windows-1252").decode(bytes);
+}
+/** SRT text -> WebVTT (comma decimals to dots, index lines dropped). */
+export function srtToVtt(srt) {
+    const blocks = srt.replace(/^﻿/, "").replace(/\r\n?/g, "\n").split(/\n{2,}/);
+    const out = ["WEBVTT"];
+    for (const block of blocks) {
+        const lines = block.split("\n").filter((l) => l.trim() !== "");
+        if (!lines.length)
+            continue;
+        if (/^\d+$/.test(lines[0].trim()))
+            lines.shift(); // cue index
+        if (!lines.length || !lines[0].includes("-->"))
+            continue;
+        const timing = lines[0].replace(/(\d+):(\d+):(\d+),(\d+)/g, "$1:$2:$3.$4");
+        out.push(`${timing}\n${lines.slice(1).join("\n")}`);
+    }
+    return out.join("\n\n") + "\n";
+}
+/** ASS/SSA file -> WebVTT (Dialogue events; styling and positioning dropped). */
+export function assFileToVtt(ass) {
+    const lines = ass.replace(/\r\n?/g, "\n").split("\n");
+    let fields = [];
+    const cues = [];
+    const toMs = (t) => {
+        const m = t.trim().match(/(\d+):(\d+):(\d+)[.:](\d+)/);
+        if (!m)
+            return 0;
+        return Number(m[1]) * 3600000 + Number(m[2]) * 60000 + Number(m[3]) * 1000 + Number(m[4].padEnd(3, "0").slice(0, 3));
+    };
+    for (const line of lines) {
+        if (/^Format:/i.test(line)) {
+            fields = line.slice(line.indexOf(":") + 1).split(",").map((f) => f.trim().toLowerCase());
+        }
+        else if (/^Dialogue:/i.test(line)) {
+            const startIdx = fields.indexOf("start");
+            const endIdx = fields.indexOf("end");
+            const textIdx = fields.indexOf("text");
+            if (startIdx < 0 || endIdx < 0 || textIdx < 0)
+                continue;
+            const parts = line.slice(line.indexOf(":") + 1).split(",");
+            const text = parts
+                .slice(textIdx)
+                .join(",")
+                .replace(/\{[^}]*\}/g, "")
+                .replace(/\\N/gi, "\n")
+                .replace(/\\h/g, " ")
+                .trim();
+            if (text)
+                cues.push({ start: toMs(parts[startIdx]), end: toMs(parts[endIdx]), text });
+        }
+    }
+    cues.sort((a, b) => a.start - b.start);
+    return buildVtt(cues);
+}
+/** Any supported subtitle file -> WebVTT, by extension (vtt passes through). */
+export function subtitleFileToVtt(name, bytes) {
+    const text = decodeSubtitleBytes(bytes);
+    const lower = name.toLowerCase();
+    if (lower.endsWith(".vtt"))
+        return text.replace(/^﻿/, "");
+    if (lower.endsWith(".ass") || lower.endsWith(".ssa"))
+        return assFileToVtt(text);
+    return srtToVtt(text);
+}
+export function extractMkvInfo(bytes) {
+    const empty = { subtitles: [], audio: [], fonts: [], clusters: [], timestampScale: 1_000_000 };
+    if (bytes.length < 8 || bytes[0] !== 0x1a || bytes[1] !== 0x45 || bytes[2] !== 0xdf || bytes[3] !== 0xa3)
+        return empty;
+    const r = new Reader(bytes);
+    const tracks = new Map();
+    const audio = [];
+    const fonts = [];
+    const clusters = [];
+    let scale = 1_000_000; // ns per tick (default = 1 ms)
+    const parseAttachments = (end) => {
+        while (r.pos < end) {
+            const id = r.readId();
+            const size = r.readSize();
+            if (size == null)
+                throw new Error("bad attachments");
+            if (id === ID_ATTACHED_FILE) {
+                const fEnd = r.pos + size;
+                let name = "";
+                let mime = "";
+                let data = null;
+                while (r.pos < fEnd) {
+                    const fid = r.readId();
+                    const fsize = r.readSize();
+                    if (fsize == null)
+                        throw new Error("bad attached file");
+                    if (fid === ID_FILE_NAME)
+                        name = utf8.decode(r.bytes(fsize));
+                    else if (fid === ID_FILE_MIME)
+                        mime = utf8.decode(r.bytes(fsize)).replace(/\0+$/, "");
+                    else if (fid === ID_FILE_DATA)
+                        data = r.bytes(fsize).slice();
+                    r.pos += fsize;
+                }
+                r.pos = fEnd;
+                // Keep font attachments only (mime font/* or the common .ttf/.otf/.ttc names).
+                if (data && (/^(application\/x-truetype-font|application\/font|font)\b|opentype|truetype/i.test(mime) || /\.(ttf|otf|ttc|otc)$/i.test(name)))
+                    fonts.push({ name, mime, data });
+            }
+            else {
+                r.pos += size;
+            }
+        }
+    };
+    const parseBlock = (size, clusterTs, duration) => {
+        const start = r.pos;
+        const trackNum = r.readSize(); // block track number is a plain EBML varint
+        if (trackNum == null)
+            throw new Error("bad block");
+        const track = tracks.get(trackNum);
+        const view = new DataView(bytes.buffer, bytes.byteOffset);
+        const relTime = view.getInt16(r.pos);
+        const flags = bytes[r.pos + 2];
+        r.pos += 3;
+        const payloadLen = size - (r.pos - start);
+        if (track && !(flags & 0x06) && payloadLen > 0) {
+            const raw = utf8.decode(r.bytes(payloadLen)).replace(/\0+$/, "").replace(/\r\n/g, "\n");
+            const text = track.codec.includes("ASS") || track.codec.includes("SSA") ? assText(raw) : track.codec.includes("WEBVTT") ? webvttText(raw) : raw.trim();
+            const startMs = ((clusterTs + relTime) * scale) / 1e6;
+            const durMs = duration != null ? (duration * scale) / 1e6 : 3000;
+            if (text)
+                track.cues.push({ start: Math.max(0, startMs), end: Math.max(0, startMs + durMs), text });
+            if (raw && (track.codec.includes("ASS") || track.codec.includes("SSA")))
+                track.assEvents.push({ start: Math.max(0, startMs), end: Math.max(0, startMs + durMs), payload: raw });
+        }
+        r.pos = start + size;
+    };
+    const parseTrackEntry = (end) => {
+        let num = 0;
+        let type = 0;
+        let codec = "";
+        let name = "";
+        let lang = "";
+        let priv = "";
+        while (r.pos < end) {
+            const id = r.readId();
+            const size = r.readSize();
+            if (size == null)
+                throw new Error("bad track entry");
+            if (id === ID_TRACK_NUMBER)
+                num = r.uint(size);
+            else if (id === ID_TRACK_TYPE)
+                type = r.uint(size);
+            else if (id === ID_CODEC_ID)
+                codec = utf8.decode(r.bytes(size)).replace(/\0+$/, "");
+            else if (id === ID_NAME)
+                name = utf8.decode(r.bytes(size));
+            else if (id === ID_LANGUAGE || (id === ID_LANGUAGE_BCP47 && !lang))
+                lang = utf8.decode(r.bytes(size)).replace(/\0+$/, "");
+            else if (id === ID_CODEC_PRIVATE)
+                priv = utf8.decode(r.bytes(size)).replace(/\0+$/, "");
+            r.pos += size;
+        }
+        r.pos = end;
+        if (type === 0x11 && codec.startsWith("S_TEXT"))
+            tracks.set(num, { codec, label: name, language: lang || "und", cues: [], codecPrivate: priv || undefined, assEvents: [] });
+        else if (type === 0x02)
+            audio.push({ number: num, label: name, language: lang || "und", codec });
+    };
+    const parseCluster = (end, selfOffset) => {
+        let clusterTs = 0;
+        let indexed = false;
+        while (r.pos < (end ?? r.length)) {
+            if (end == null) {
+                const next = r.peekId();
+                if (next == null || SEGMENT_CHILDREN.has(next))
+                    return; // unknown-size cluster ended
+            }
+            const id = r.readId();
+            const size = r.readSize();
+            if (size == null)
+                throw new Error("bad cluster child");
+            if (id === ID_CLUSTER_TIMESTAMP) {
+                clusterTs = r.uint(size);
+                r.pos += size;
+                if (!indexed) {
+                    indexed = true;
+                    clusters.push({ offset: selfOffset, timeMs: (clusterTs * scale) / 1e6 });
+                }
+            }
+            else if (id === ID_SIMPLE_BLOCK) {
+                parseBlock(size, clusterTs, null);
+            }
+            else if (id === ID_BLOCK_GROUP) {
+                const gEnd = r.pos + size;
+                let blockAt = -1;
+                let blockSize = 0;
+                let duration = null;
+                while (r.pos < gEnd) {
+                    const gid = r.readId();
+                    const gsize = r.readSize();
+                    if (gsize == null)
+                        throw new Error("bad block group");
+                    if (gid === ID_BLOCK) {
+                        blockAt = r.pos;
+                        blockSize = gsize;
+                    }
+                    else if (gid === ID_BLOCK_DURATION)
+                        duration = r.uint(gsize);
+                    r.pos += gsize;
+                }
+                if (blockAt >= 0) {
+                    const save = r.pos;
+                    r.pos = blockAt;
+                    parseBlock(blockSize, clusterTs, duration);
+                    r.pos = save;
+                }
+            }
+            else {
+                r.pos += size;
+            }
+        }
+    };
+    try {
+        while (r.pos < r.length) {
+            const id = r.readId();
+            const size = r.readSize();
+            if (id === ID_EBML) {
+                if (size == null)
+                    return empty;
+                r.pos += size;
+            }
+            else if (id === ID_SEGMENT) {
+                const segEnd = size == null ? r.length : Math.min(r.pos + size, r.length);
+                while (r.pos < segEnd) {
+                    const clStart = r.pos;
+                    const cid = r.readId();
+                    const csize = r.readSize();
+                    if (cid === ID_INFO && csize != null) {
+                        const iEnd = r.pos + csize;
+                        while (r.pos < iEnd) {
+                            const iid = r.readId();
+                            const isize = r.readSize();
+                            if (isize == null)
+                                throw new Error("bad info");
+                            if (iid === ID_TIMESTAMP_SCALE)
+                                scale = r.uint(isize);
+                            r.pos += isize;
+                        }
+                    }
+                    else if (cid === ID_TRACKS && csize != null) {
+                        const tEnd = r.pos + csize;
+                        while (r.pos < tEnd) {
+                            const tid = r.readId();
+                            const tsize = r.readSize();
+                            if (tsize == null)
+                                throw new Error("bad tracks");
+                            if (tid === ID_TRACK_ENTRY)
+                                parseTrackEntry(r.pos + tsize);
+                            else
+                                r.pos += tsize;
+                        }
+                    }
+                    else if (cid === ID_ATTACHMENTS && csize != null) {
+                        parseAttachments(r.pos + csize);
+                    }
+                    else if (cid === ID_CLUSTER) {
+                        parseCluster(csize == null ? null : r.pos + csize, clStart);
+                    }
+                    else if (csize != null) {
+                        r.pos += csize;
+                    }
+                    else {
+                        return { subtitles: finish(tracks), audio, fonts, clusters, timestampScale: scale }; // unknown-size non-cluster: bail with what we have
+                    }
+                }
+            }
+            else if (size != null) {
+                r.pos += size;
+            }
+            else {
+                break;
+            }
+        }
+    }
+    catch {
+        // Truncated or malformed tail: keep whatever cues were collected.
+    }
+    return { subtitles: finish(tracks), audio, fonts, clusters, timestampScale: scale };
+}
+function finish(tracks) {
+    const out = [];
+    for (const t of tracks.values()) {
+        if (!t.cues.length)
+            continue;
+        t.cues.sort((a, b) => a.start - b.start);
+        out.push({ label: t.label || t.language, language: t.language, vtt: buildVtt(t.cues), assDoc: buildAssDoc(t) });
+    }
+    return out;
+}
+/** ASS time: H:MM:SS.cc (centiseconds). */
+function assTime(ms) {
+    const h = Math.floor(ms / 3600000);
+    const m = Math.floor((ms % 3600000) / 60000);
+    const s = Math.floor((ms % 60000) / 1000);
+    const cs = Math.floor((ms % 1000) / 10);
+    const p = (n) => String(n).padStart(2, "0");
+    return `${h}:${p(m)}:${p(s)}.${p(cs)}`;
+}
+/**
+ * Rebuild a complete .ass document for an embedded ASS/SSA track: the header comes
+ * from CodecPrivate (which holds everything up to the [Events] Format line), and the
+ * Dialogue lines come from the blocks ("ReadOrder,Layer,Style,..." -> Start/End from
+ * the block timing, ReadOrder dropped). Used for styled rendering via libass.
+ */
+function buildAssDoc(t) {
+    if (!t.assEvents.length)
+        return undefined;
+    let header = (t.codecPrivate ?? "").replace(/\r\n?/g, "\n").trimEnd();
+    if (!header)
+        header =
+            "[Script Info]\nScriptType: v4.00+\nPlayResX: 384\nPlayResY: 288\n\n[V4+ Styles]\n" +
+                "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n" +
+                "Style: Default,Arial,16,&Hffffff,&Hffffff,&H0,&H0,0,0,0,0,100,100,0,0,1,1,0,2,10,10,10,1";
+    if (!/\[Events\]/i.test(header))
+        header += "\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text";
+    const events = [...t.assEvents].sort((a, b) => a.start - b.start);
+    const lines = events.map((ev) => {
+        const parts = ev.payload.split(",");
+        const layer = parts.length > 1 ? parts[1].trim() : "0";
+        const rest = parts.length > 2 ? parts.slice(2).join(",") : ev.payload;
+        return `Dialogue: ${layer},${assTime(ev.start)},${assTime(ev.end)},${rest}`;
+    });
+    return header + "\n" + lines.join("\n") + "\n";
+}
+// --- encoded audio packet extraction (for the libav direct-decode path) ----------
+/** Parse a Block/SimpleBlock payload into its frame byte-ranges, lacing-aware
+ *  (audio blocks are commonly laced: Xiph, EBML or fixed). */
+function parseBlockFrames(bytes, start, size) {
+    const r = new Reader(bytes);
+    r.pos = start;
+    const track = r.readSize(); // block track number is a plain EBML varint
+    if (track == null)
+        return null;
+    const view = new DataView(bytes.buffer, bytes.byteOffset);
+    const relTime = view.getInt16(r.pos);
+    const flags = bytes[r.pos + 2];
+    r.pos += 3;
+    const end = start + size;
+    const lacing = flags & 0x06;
+    const frames = [];
+    if (!lacing) {
+        if (end > r.pos)
+            frames.push([r.pos, end - r.pos]);
+        return { track, relTime, frames };
+    }
+    const count = bytes[r.pos] + 1;
+    r.pos += 1;
+    const sizes = [];
+    if (lacing === 0x04) {
+        // Fixed-size lacing: equal split of the remaining payload.
+        const each = Math.floor((end - r.pos) / count);
+        for (let i = 0; i < count; i++)
+            sizes.push(each);
+    }
+    else if (lacing === 0x02) {
+        // Xiph lacing: 255-run sums for the first count-1 frames.
+        for (let i = 0; i < count - 1; i++) {
+            let s = 0;
+            let v = 255;
+            while (v === 255) {
+                v = bytes[r.pos];
+                r.pos += 1;
+                s += v;
+            }
+            sizes.push(s);
+        }
+    }
+    else {
+        // EBML lacing: first size an unsigned vint, then signed-vint deltas.
+        let prev = r.readSize();
+        if (prev == null)
+            return null;
+        sizes.push(prev);
+        for (let i = 1; i < count - 1; i++) {
+            const delta = r.readSignedVint();
+            if (delta == null)
+                return null;
+            prev += delta;
+            sizes.push(prev);
+        }
+    }
+    let off = r.pos;
+    for (const s of sizes) {
+        frames.push([off, s]);
+        off += s;
+    }
+    if (lacing !== 0x04 && end > off)
+        frames.push([off, end - off]); // last frame = remainder
+    return { track, relTime, frames };
+}
+/**
+ * Iterate the encoded audio frames of one track, starting at the cluster covering
+ * `fromMs` (via the cluster index collected by extractMkvInfo). Yields zero-copy
+ * subarray views with the containing block's timestamp; a decoder's sample clock is
+ * expected to smooth per-frame times within a laced block.
+ */
+export function* readAudioPackets(bytes, trackNumber, fromMs, info) {
+    if (!info.clusters.length)
+        return;
+    let start = info.clusters[0].offset;
+    for (const c of info.clusters) {
+        if (c.timeMs <= fromMs)
+            start = c.offset;
+        else
+            break;
+    }
+    const r = new Reader(bytes);
+    r.pos = start;
+    try {
+        while (r.pos < r.length) {
+            const id = r.readId();
+            const size = r.readSize();
+            if (id !== ID_CLUSTER) {
+                if (size == null)
+                    return;
+                r.pos += size;
+                continue;
+            }
+            const end = size == null ? null : r.pos + size;
+            let clusterTs = 0;
+            while (r.pos < (end ?? r.length)) {
+                if (end == null) {
+                    const next = r.peekId();
+                    if (next == null || SEGMENT_CHILDREN.has(next))
+                        break; // unknown-size cluster ended
+                }
+                const cid = r.readId();
+                const csize = r.readSize();
+                if (csize == null)
+                    throw new Error("bad cluster child");
+                let bStart = -1;
+                let bSize = 0;
+                if (cid === ID_CLUSTER_TIMESTAMP) {
+                    clusterTs = r.uint(csize);
+                    r.pos += csize;
+                    continue;
+                }
+                else if (cid === ID_SIMPLE_BLOCK) {
+                    bStart = r.pos;
+                    bSize = csize;
+                    r.pos += csize;
+                }
+                else if (cid === ID_BLOCK_GROUP) {
+                    const gEnd = r.pos + csize;
+                    while (r.pos < gEnd) {
+                        const gid = r.readId();
+                        const gsize = r.readSize();
+                        if (gsize == null)
+                            throw new Error("bad block group");
+                        if (gid === ID_BLOCK) {
+                            bStart = r.pos;
+                            bSize = gsize;
+                        }
+                        r.pos += gsize;
+                    }
+                }
+                else {
+                    r.pos += csize;
+                    continue;
+                }
+                if (bStart < 0)
+                    continue;
+                const blk = parseBlockFrames(bytes, bStart, bSize);
+                if (!blk || blk.track !== trackNumber)
+                    continue;
+                const tsMs = ((clusterTs + blk.relTime) * info.timestampScale) / 1e6;
+                if (tsMs < fromMs - 100)
+                    continue; // pre-roll tolerance
+                for (const [off, len] of blk.frames) {
+                    if (len > 0 && off + len <= bytes.length)
+                        yield { tsMs, data: bytes.subarray(off, off + len) };
+                }
+            }
+        }
+    }
+    catch {
+        // Truncated or malformed tail: end the stream with what we have.
+    }
+}

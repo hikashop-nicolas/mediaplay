@@ -34,7 +34,11 @@ const STYLE_ID = "mediaplay-style";
 
 /** The file to play. */
 export interface MediaSource {
-  bytes: Uint8Array;
+  /** The media, ideally as a disk-backed Blob/File so playback, remux and extraction read it
+   * on demand instead of holding the whole (multi-GB) file in RAM. `bytes` is still accepted
+   * for callers that already have the data in memory; provide one or the other. */
+  blob?: Blob;
+  bytes?: Uint8Array;
   /** MIME type; decides <audio> vs <video> and seeds the blob type. */
   mime?: string;
   /** File name (currently informational; reserved for future export naming). */
@@ -134,10 +138,10 @@ const RATE_KEY = "mediaplay.rate"; // playback speed, remembered across files
 
 /** Rebuild the file keeping only the chosen audio track (stream copy), for audio switching:
  * browsers expose no API to pick among a file's embedded audio tracks. */
-async function remuxWithAudioTrack(bytes: Uint8Array, keepTrackId: number): Promise<Blob | null> {
+async function remuxWithAudioTrack(blob: Blob, keepTrackId: number): Promise<Blob | null> {
   const mb = await import("mediabunny");
   try {
-    const input = new mb.Input({ source: new mb.BufferSource(bytes.slice().buffer), formats: mb.ALL_FORMATS });
+    const input = new mb.Input({ source: new mb.BlobSource(blob), formats: mb.ALL_FORMATS });
     const target = new mb.BufferTarget();
     const format = new mb.MkvOutputFormat();
     const output = new mb.Output({ format, target });
@@ -159,14 +163,14 @@ async function remuxWithAudioTrack(bytes: Uint8Array, keepTrackId: number): Prom
  * allowed in the target, WebCodecs transcode where the platform can decode but the copy
  * isn't allowed). Returns null when no target container can represent the tracks.
  */
-async function tryRemux(bytes: Uint8Array, isAudio: boolean): Promise<Blob | null> {
+async function tryRemux(blob: Blob, isAudio: boolean): Promise<Blob | null> {
   const mb = await import("mediabunny");
   const targets = isAudio
     ? [new mb.Mp4OutputFormat(), new mb.OggOutputFormat(), new mb.WavOutputFormat()]
     : [new mb.Mp4OutputFormat(), new mb.WebMOutputFormat()];
   for (const format of targets) {
     try {
-      const input = new mb.Input({ source: new mb.BufferSource(bytes.slice().buffer), formats: mb.ALL_FORMATS });
+      const input = new mb.Input({ source: new mb.BlobSource(blob), formats: mb.ALL_FORMATS });
       const target = new mb.BufferTarget();
       const output = new mb.Output({ format, target });
       const conversion = await mb.Conversion.init({ input, output });
@@ -183,7 +187,9 @@ async function tryRemux(bytes: Uint8Array, isAudio: boolean): Promise<Blob | nul
 class MediaPlayer implements MediaPlayerHandle {
   private wrap: HTMLElement | null = null;
   private url: string | null = null;
-  private bytes: Uint8Array | null = null;
+  private srcBlob: Blob | null = null; // disk-backed source for playback/remux (no full copy in RAM)
+  private eagerBytes: Uint8Array | null = null; // set only when the caller passed bytes directly
+  private materialized: Uint8Array | null = null; // buffer read from srcBlob on demand, cached
   private media: HTMLMediaElement | null = null;
   private applyLiveSubtitle: ((content: string, filename: string) => void) | null = null;
   private onDocKey: ((e: KeyboardEvent) => void) | null = null;
@@ -204,14 +210,16 @@ class MediaPlayer implements MediaPlayerHandle {
   private mount(container: HTMLElement, source: MediaSource): void {
     ensureStyles();
     const S = this.S;
-    this.bytes = source.bytes;
+    this.eagerBytes = source.bytes ?? null;
+    const mime = source.mime ?? "";
+    // Prefer the disk-backed Blob/File; only build one from bytes if that's all we were given.
+    this.srcBlob = source.blob ?? (source.bytes && source.bytes.length ? new Blob([source.bytes as BlobPart], mime ? { type: mime } : undefined) : null);
     const wrap = document.createElement("div");
     wrap.className = "ot-media";
     wrap.tabIndex = 0;
-    const mime = source.mime ?? "";
-    if (source.bytes && source.bytes.length) {
-      const blob = new Blob([source.bytes as BlobPart], mime ? { type: mime } : undefined);
-      this.url = URL.createObjectURL(blob);
+    if (this.srcBlob) {
+      const srcBlob = this.srcBlob;
+      this.url = URL.createObjectURL(srcBlob);
       const isAudio = mime.startsWith("audio/");
       const m = document.createElement(isAudio ? "audio" : "video") as HTMLMediaElement;
       this.media = m;
@@ -291,7 +299,7 @@ class MediaPlayer implements MediaPlayerHandle {
         note.className = "ot-media-msg";
         note.textContent = S.mediaConverting;
         wrap.appendChild(note);
-        tryRemux(source.bytes, isAudio).then(
+        tryRemux(srcBlob, isAudio).then(
           (blob) => {
             note.remove();
             if (!blob) return fail();
@@ -670,7 +678,7 @@ class MediaPlayer implements MediaPlayerHandle {
           note.className = "ot-media-msg";
           note.textContent = S.mediaConverting;
           wrap.appendChild(note);
-          const blob = await remuxWithAudioTrack(source.bytes, audioTracks[i]!.number);
+          const blob = await remuxWithAudioTrack(srcBlob, audioTracks[i]!.number);
           note.remove();
           if (!blob || !this.wrap) return;
           const pos = m.currentTime;
@@ -727,10 +735,10 @@ class MediaPlayer implements MediaPlayerHandle {
         };
         rebuildMenu();
 
-        window.setTimeout(() => {
+        window.setTimeout(async () => {
           if (!this.wrap) return;
           try {
-            const info = extractMkvInfo(source.bytes);
+            const info = extractMkvInfo(await this.buffer());
             mkvInfo = info;
             // Hand the file's embedded fonts to libass BEFORE selecting a track, so the
             // first styled render already resolves the intended (incl. CJK) faces.
@@ -793,7 +801,7 @@ class MediaPlayer implements MediaPlayerHandle {
     if (!this.opts.embedded) void video.play().catch(() => undefined);
     try {
       const { playSyncedAudio } = await import("./synced-audio");
-      const handle = await playSyncedAudio(video, this.bytes!, audioIndex, base, direct);
+      const handle = await playSyncedAudio(video, await this.buffer(), audioIndex, base, direct);
       if (!this.wrap) {
         if (handle && handle !== "undecodable") handle.destroy();
         return;
@@ -806,8 +814,20 @@ class MediaPlayer implements MediaPlayerHandle {
     }
   }
 
+  /** The whole file as bytes, read from the source Blob on first use and cached. Used only by
+   * the paths that still need random access to a buffer (info/subtitle/font extraction and, for
+   * now, the AC-3/E-AC-3 audio reader). Everything else reads the Blob on demand. */
+  private async buffer(): Promise<Uint8Array> {
+    if (this.eagerBytes) return this.eagerBytes;
+    if (!this.materialized) {
+      if (!this.srcBlob) return new Uint8Array(0);
+      this.materialized = new Uint8Array(await this.srcBlob.arrayBuffer());
+    }
+    return this.materialized;
+  }
+
   getBytes(): Uint8Array | undefined {
-    return this.bytes ?? undefined;
+    return this.eagerBytes ?? this.materialized ?? undefined;
   }
 
   getMediaElement(): HTMLMediaElement | undefined {
