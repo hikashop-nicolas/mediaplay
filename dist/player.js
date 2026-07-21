@@ -487,18 +487,19 @@ class MediaPlayer {
                     toggleFullscreen();
                 });
                 // Any native path that still fullscreens the bare video (the controls' own
-                // fullscreen button) is upgraded to wrap fullscreen within the same gesture.
+                // fullscreen button) is upgraded to wrap fullscreen. Request wrap DIRECTLY (it
+                // contains the video, so fullscreen just moves up to it): exiting first and then
+                // re-requesting loses the user activation, so the re-request is rejected and the
+                // player drops out of fullscreen entirely. If the direct upgrade still fails, the
+                // video stays fullscreen with bridged subs, which never reverts.
                 let upgrading = false;
                 const onFsChange = () => {
                     poke();
                     if (document.fullscreenElement === m && !upgrading) {
                         upgrading = true;
-                        document
-                            .exitFullscreen()
-                            .then(() => wrap.requestFullscreen())
-                            .then(() => (upgrading = false), () => {
+                        wrap.requestFullscreen().then(() => (upgrading = false), () => {
                             upgrading = false;
-                            bridgeSubs(); // couldn't upgrade: at least keep subtitles visible
+                            bridgeSubs(); // couldn't upgrade: keep the video fullscreen with subtitles
                         });
                         return;
                     }
