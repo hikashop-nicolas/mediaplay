@@ -38,9 +38,10 @@ Two things make ALAC harder than the AC-3 work that already ships:
 - **Not** hand-porting to JavaScript. This is bit-exact lossless DSP, where a
   transcription slip gives quiet corruption rather than a visible failure. The C compiles
   cleanly, so Emscripten gets correctness for free.
-- **No upstream PR for the mediabunny change.** Upstream's stated scope is "codecs
-  specified by WebCodecs, plus a few PCM", and ALAC is in no browser's WebCodecs, so it
-  would likely be declined on scope. We carry it in the fork, as subedit already does.
+- **Structure it for upstream, decide later whether to send it.** Superseded the original
+  "no PR" call once `@mediabunny/ac3` turned up: keep the core demux change as one clean
+  commit and the decoder as a separate package, which is exactly how upstream already
+  handles codecs outside WebCodecs. Costs nothing if we never send it.
 
 ## Phase 0: tidy the fork first (done)
 
@@ -114,17 +115,47 @@ Three consequences:
 2. **The blocker is unchanged.** `NON_PCM_AUDIO_CODECS` in 1.51.0 is still the same seven
    codecs, and `supports(codec: AudioCodec)` is typed against that union. The ac3 package
    only works because ac3 was already in it. ALAC still needs the fork edit below.
-3. **Reconsider the no-upstream-PR decision at the end.** Upstream clearly does support
-   codecs outside WebCodecs, just as separate packages. An ALAC package plus a small core
-   change is more plausible than the earlier reading of their scope. Not now, but revisit
-   once it works.
+3. **The no-upstream-PR decision was wrong** and is revised below.
 
-### Separately: mediaplay may be able to drop its libav build
+### Measured: @mediabunny/ac3 would not shrink anything
 
-mediaplay carries a custom 0.9MB libav.js build purely to decode AC-3, E-AC-3, DTS,
-TrueHD and MLP. `@mediabunny/ac3` now covers the first two officially, in a worker, and
-smaller. It does **not** cover DTS, TrueHD or MLP, so the libav build cannot go away
-entirely, but the split is worth measuring. Out of scope for ALAC; worth its own look.
+Checked, because it looked like an easy win. It is not:
+
+| | payload | codecs covered |
+|---|---|---|
+| mediaplay's libav assets | 1043 KB | ac3, eac3, dts, truehd, mlp |
+| `@mediabunny/ac3` (min bundle) | 1121 KB | ac3, eac3 |
+
+**78 KB larger for three fewer codecs**, and DTS, TrueHD and MLP would still need the libav
+build alongside it, so the real comparison is 1121 KB *plus* a libav build against 1043 KB
+total. Our build is already size-optimised for exactly the codec set we need; theirs is a
+general-purpose build of two.
+
+There is a second reason not to switch, already measured in this repo: `@mediabunny/ac3`
+decodes in a Web Worker, and `libav-decoder.ts` records that worker mode put a postMessage
+round trip on every packet and dragged throughput below realtime, where the direct call
+path decodes at about 80x realtime. Switching would re-introduce a problem already solved.
+
+So: keep the libav build. The ac3 package stays useful only as the structural template for
+the ALAC decoder.
+
+## The upstream split: core demuxes, package decodes
+
+`@mediabunny/ac3` shows the division upstream already works to, and ALAC fits it exactly:
+
+- **Core knows the codec and demuxes it.** For ac3 that is the union entry, two
+  codec-to-string mappings, the string-to-codec parse, the decoder-config detection, and
+  the ISOBMFF sample entry. Core ships **no** ac3 decoder.
+- **A separate package decodes it**, through the custom coder API.
+
+So ALAC becomes a small, self-contained core change (the same five touchpoints in
+`src/codec.ts` plus the sample entry and cookie box in `isobmff-demuxer.ts`) and a
+standalone decoder package carrying Apple's Apache-2.0 WASM.
+
+That core change is proposable upstream on its own terms: it is demuxing support in a
+demuxing library, matching a pattern they established. The earlier reading that they would
+decline ALAC on scope was wrong. Build it in the fork, keep the core change as a clean
+separate commit so it can become a PR, and ship the decoder as its own package either way.
 
 ## Phase 2: demux, in the fork
 
