@@ -57,20 +57,42 @@ Doing this first avoids building ALAC on top of two commits that are now redunda
 
 ## Phase 1: a test corpus we generate ourselves
 
-macOS ships `afconvert`, which encodes ALAC natively, so nothing needs downloading.
-Verified: a synthetic 3-second stereo tone converts to a 119KB `.m4a` carrying a proper
-`alac` sample entry (2 channels, 16-bit, 44100Hz) with the 36-byte magic cookie.
+macOS ships `afconvert`, which encodes ALAC natively, so **nothing needs downloading**.
+Every case below was produced and verified locally:
 
-Generate from a script, the way richdoc's corpus is generated, and commit the output:
+| Fixture | Verified output |
+|---|---|
+| 16-bit stereo 44.1kHz | `alac (0x00000001) from 16-bit source`, 4096 frames/packet |
+| 24-bit stereo 96kHz | `alac (0x00000003) from 24-bit source` (the format flag encodes bit depth) |
+| 5.1 48kHz | 6 ch, layout `C L R Ls Rs LFE` |
+| 7.1 48kHz | 8 ch, layout `C Lc Rc L R Ls Rs LFE` |
+| mono | trivial |
 
-- 16-bit stereo 44.1kHz (the common case)
-- 24-bit stereo 96kHz (different bit depth, the cookie's `bitDepth` path)
-- mono
-- 5.1 if `afconvert` will produce it (channel layout handling)
-- the same tone as ALAC-in-Matroska, for the `A_ALAC` path
+Generate them from a script and commit the output, the way richdoc's corpus is generated.
+Give **each channel a distinct frequency**, so a channel-ordering bug is detectable rather
+than merely suspected: with equal-amplitude tones, per-channel RMS cannot tell channels
+apart, but frequency can.
 
-Separately, keep **one real-world album track** outside the repo as a confidence check.
-Real files bring cover art, chapters and odd tagging that a generated corpus will not.
+The one case `afconvert` cannot make is **ALAC in Matroska**; it writes `m4af` and `caff`
+only. Once the fork demuxes ALAC it can also mux it, so that fixture comes out of Phase 2
+rather than here.
+
+Still worth keeping **one real-world album track** outside the repo as a confidence check,
+for the cover art, chapters and odd tagging a generated corpus will not have.
+
+### Channel order is not WAV order
+
+Confirmed by round-tripping the 5.1 fixture and identifying each channel by its tone, not
+by trusting the metadata:
+
+```
+WAV / SMPTE order:  L   R   C   LFE  Ls  Rs
+ALAC order:         C   L   R   Ls   Rs  LFE
+ALAC index -> WAV:  2   0   1   4    5   3
+```
+
+So a multichannel ALAC decode that looks "right" on a level meter can still have the
+centre channel in the left speaker. The remap is small and now known; the fixtures test it.
 
 ## Phase 2: demux, in the fork
 
@@ -104,7 +126,11 @@ static assets under a base URL, the same arrangement as the libav and libass ass
 
 ALAC is **lossless**, which gives an oracle nothing else in this project has: decode our
 ALAC back to PCM and compare **byte for byte** against the WAV it was made from. Not
-"sounds right", not "close enough" — sample-exact or it is broken.
+"sounds right", not "close enough": sample-exact or it is broken. Verified end to end on
+the stereo fixture, where the round trip is byte-identical across all 529,200 bytes.
+
+For multichannel the comparison has to undo ALAC's channel order first (see Phase 1);
+after the remap it is exact again.
 
 That is the centrepiece. Around it:
 
@@ -127,9 +153,10 @@ That is the centrepiece. Around it:
 
 - **The fork diverges further.** Every carried commit is maintenance. Phase 0 reduces the
   fork to one commit plus plumbing, which is the right time to add a second.
-- **Channel layouts beyond stereo.** ALAC's channel ordering is not the same as WebAudio's
-  for 5.1. If `afconvert` will not produce multichannel, this stays untested and should be
-  stated as unsupported rather than assumed.
+- **Channel layouts beyond stereo.** Resolved as a risk to the extent that it can be
+  before building: 5.1 and 7.1 fixtures exist and the ALAC-to-WAV channel mapping is
+  measured (above). What remains is getting the remap right in the decoder wiring, which
+  the fixtures will catch.
 - **Memory on long tracks.** The existing synced-audio engine streams and schedules
   buffers, so this should inherit that; it is worth confirming rather than assuming, since
   a lossless album track is large.
