@@ -1,6 +1,6 @@
 # ALAC playback (plan)
 
-Status: **planned, not started**. Drafted 2026-07-29.
+Status: **Phase 0 done** (2026-07-29). Phases 1 to 5 not started.
 
 ## Where we are
 
@@ -42,18 +42,23 @@ Two things make ALAC harder than the AC-3 work that already ships:
   specified by WebCodecs, plus a few PCM", and ALAC is in no browser's WebCodecs, so it
   would likely be declined on scope. We carry it in the fork, as subedit already does.
 
-## Phase 0: tidy the fork first
+## Phase 0: tidy the fork first (done)
 
-`hikashop-nicolas/mediabunny` is based on 1.50.8 and sits 16 commits behind upstream main
-(now 1.51.0). Of its three functional commits, **two are already merged upstream**:
-PR #441 (aux writer) and PR #442 (BlockDuration). Only PR #443 (S_TEXT/ASS muxing) is
-still open.
+Two of the fork's three functional commits were already merged upstream (PR #441 aux
+writer, PR #442 BlockDuration); only PR #443 (S_TEXT/ASS muxing) is still open. The fork
+was rebased onto upstream 1.51.0 and is now **two commits** instead of five: the ASS source
+change, and the build that force-adds `dist/modules` past upstream's gitignore so it stays
+consumable as a git dependency.
 
-So: rebase the fork onto current upstream, keeping only the ASS commit and the
-dist-committing plumbing that makes it consumable as a git dependency. Re-pin and re-test
-subedit, which consumes it at `113b0f2`, before anything ALAC touches it.
+Branch `fork-main`, at `7b5c4d0`. Verified: the fork's own node suite matches unmodified
+upstream exactly (7 failures either way, all pre-existing HEVC and ProRes cases that need a
+server extension unavailable here).
 
-Doing this first avoids building ALAC on top of two commits that are now redundant.
+subedit is re-pinned and green. It also gained the test that should have existed already:
+styled ASS-in-MKV muxing is the whole reason for the fork, and nothing in its 120 tests
+touched it, so a rebase could have silently removed it with everything still passing.
+Upstream's `SUBTITLE_CODECS` is `webvtt` only, so the new test genuinely fails without the
+fork.
 
 ## Phase 1: a test corpus we generate ourselves
 
@@ -93,6 +98,33 @@ ALAC index -> WAV:  2   0   1   4    5   3
 
 So a multichannel ALAC decode that looks "right" on a level meter can still have the
 centre channel in the left speaker. The remap is small and now known; the fixtures test it.
+
+## What upstream has since built, and what it changes
+
+Upstream 1.51.0 is a monorepo with per-codec extension packages, one of which is
+**`@mediabunny/ac3`**: an official AC-3 and E-AC-3 decoder and encoder, built on
+mediabunny's custom coder API over a size-optimized FFmpeg WASM build, running in a Web
+Worker. MPL-2.0.
+
+Three consequences:
+
+1. **There is now a reference implementation to copy.** `packages/ac3/src/decoder.ts` is
+   exactly the shape Phase 3 needs: a `CustomAudioDecoder` subclass, a worker client, and
+   `registerDecoder`. Follow it rather than inventing a structure.
+2. **The blocker is unchanged.** `NON_PCM_AUDIO_CODECS` in 1.51.0 is still the same seven
+   codecs, and `supports(codec: AudioCodec)` is typed against that union. The ac3 package
+   only works because ac3 was already in it. ALAC still needs the fork edit below.
+3. **Reconsider the no-upstream-PR decision at the end.** Upstream clearly does support
+   codecs outside WebCodecs, just as separate packages. An ALAC package plus a small core
+   change is more plausible than the earlier reading of their scope. Not now, but revisit
+   once it works.
+
+### Separately: mediaplay may be able to drop its libav build
+
+mediaplay carries a custom 0.9MB libav.js build purely to decode AC-3, E-AC-3, DTS,
+TrueHD and MLP. `@mediabunny/ac3` now covers the first two officially, in a worker, and
+smaller. It does **not** cover DTS, TrueHD or MLP, so the libav build cannot go away
+entirely, but the split is worth measuring. Out of scope for ALAC; worth its own look.
 
 ## Phase 2: demux, in the fork
 
