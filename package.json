@@ -32,7 +32,7 @@
   },
   "dependencies": {
     "@jellyfin/libass-wasm": "^4.2.4",
-    "mediabunny": "^1.50.7"
+    "mediabunny": "github:hikashop-nicolas/mediabunny#3ccd321"
   },
   "devDependencies": {
     "cypress": "^15.0.0",
