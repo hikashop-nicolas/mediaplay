@@ -1,6 +1,6 @@
 # ALAC playback (plan)
 
-Status: **Phases 0 and 1 done** (2026-07-29). Phases 2 to 5 not started.
+Status: **Phases 0, 1 and 2 done** (2026-07-29). Phases 3 to 5 not started.
 
 ## Where we are
 
@@ -172,22 +172,31 @@ demuxing library, matching a pattern they established. The earlier reading that 
 decline ALAC on scope was wrong. Build it in the fork, keep the core change as a clean
 separate commit so it can become a PR, and ship the decoder as its own package either way.
 
-## Phase 2: demux, in the fork
+## Phase 2: demux, in the fork (done)
 
-Insertion points, already located:
+Fork `fork-main`, commit `a02d8df` (the core change, written to be PR-able) plus a dist
+rebuild. All five fixtures demux with the right codec, channel count, sample rate and a
+24-byte cookie, and their packets read in the expected counts. The fork's suite matches
+upstream's failure set exactly: 7 pre-existing failures, 294 tests, 5 added.
 
-- `src/codec.ts`: add `alac` to `NON_PCM_AUDIO_CODECS`. Care needed here: mediabunny maps
-  codecs to WebCodecs configs, and no browser has ALAC in WebCodecs. It must report the
-  track as undecodable by the platform so the custom-decoder path is the only route, and
-  never claim otherwise.
-- `src/isobmff/isobmff-demuxer.ts`, in the audio sample-entry chain beside `'flac'` and
-  `'ac-3'` (around line 1160): add `alac`, setting `track.info.codec = 'alac'`.
-- The same file's box handler: capture the nested `alac` box as `codecDescription`,
-  exactly as `dfLa`, `avcC` and `hvcC` already do (around line 1370). That box is the
-  magic cookie the decoder needs.
+What the corpus caught, which is why mono and surround were worth generating:
 
-Verify by reading the Phase 1 corpus through the fork and dumping packet counts and the
-cookie, before any decoder exists.
+- **The sample entry lies about ALAC.** Every fixture declares 2 channels in its
+  AudioSampleEntry regardless of the truth (1, 2, 6, 8), and the entry's sample rate is a
+  16.16 fixed-point field that cannot represent 96 kHz at all. Both are taken from the
+  magic cookie instead. A stereo-only corpus would have passed while being wrong.
+- **The cookie is a FullBox.** Its content opens with a version and flags; the 24 bytes
+  after them are what every ALAC decoder calls the magic cookie, so those four are stripped
+  once in the demuxer rather than by each consumer.
+
+And one thing worth knowing before any upstream PR:
+
+- **ALAC is the first codec mediabunny can demux but not encode.** No ALAC encoder exists
+  in WebCodecs, in the server extension, or in any extension package. The suite enumerates
+  the audio codec union and round-trips each one, so adding ALAC made it demand an encoder
+  that cannot exist; the loop now skips it explicitly. Upstream would need to accept that
+  the union can contain a decode-only codec, which is a design question rather than a
+  detail, and the likeliest thing to be argued about in review.
 
 ## Phase 3: the decoder
 
