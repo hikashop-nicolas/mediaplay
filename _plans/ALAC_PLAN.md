@@ -1,6 +1,7 @@
 # ALAC playback (plan)
 
-Status: **Phases 0, 1 and 2 done** (2026-07-29). Phases 3 to 5 not started.
+Status: **Phases 0 to 3 and 5 done** (2026-07-29). Phase 4 is partly done: the exact
+oracle and the unit tests exist; the Cypress playback test does not.
 
 ## Where we are
 
@@ -198,7 +199,25 @@ And one thing worth knowing before any upstream PR:
   the union can contain a decode-only codec, which is a design question rather than a
   detail, and the likeliest thing to be argued about in review.
 
-## Phase 3: the decoder
+## Phase 3: the decoder (done)
+
+Apple's decoder, Apache-2.0, built decoder-only through Emscripten in a pinned Docker
+image (`emscripten/emsdk:4.0.7`), so no local toolchain is needed. **21 KB of wasm** plus
+10 KB of glue, against roughly 1 MB for the libav build beside it.
+
+Two things the port turned up, both in `alac/NOTICE.md`:
+
+- **Apple's endianness detection does not know about wasm.** `EndianPortable.c` recognises
+  only i386, x86_64 and Windows as little-endian, so on wasm32 it takes the big-endian path
+  and every byte swap becomes a no-op. The magic cookie is big-endian, so the decoder was
+  configured from a byte-reversed frame length and sample rate. The build passes
+  `-DTARGET_RT_LITTLE_ENDIAN=1`, correct unconditionally since WebAssembly is little-endian
+  by specification, and Apple's sources stay byte-for-byte upstream.
+- **24-bit output is packed three-byte samples**, not sign-extended 32-bit containers. The
+  plan assumed the opposite. Reading it the wrong way gives something that still sounds
+  like plausible audio.
+
+## Phase 3 (original notes)
 
 Build Apple's decoder-only sources with Emscripten into a small wasm module, served as
 static assets under a base URL, the same arrangement as the libav and libass assets.
@@ -227,7 +246,20 @@ That is the centrepiece. Around it:
   and the conversion to Float32 planes is where a scaling error would hide. The
   byte-exact check catches it.
 
-## Phase 5: wire mediaplay
+## Phase 5: wire mediaplay (done)
+
+Small, because the existing fallback already fitted: an unplayable file is converted in
+memory to WAV, WAV is PCM, so with the decoder registered that path handles ALAC with no
+encoder anywhere. Safari needs no special case at all: it plays ALAC natively, so no error
+fires, the conversion path is never entered, and the wasm is never fetched.
+
+**Known limitation found here:** mediabunny's WAV output writes 16-bit PCM, so a 24-bit
+source is narrowed going through this fallback. The decoder is exact at 24 bits; the
+conversion is not. Measured deviation is one LSB, consistently in one direction. Fixable by
+passing a `codec: 'pcm-s24'` conversion option once the source depth is known, which the
+generic path does not currently track.
+
+## Phase 5 (original notes)
 
 - Move mediaplay from npm `mediabunny` to the fork, as subedit already does.
 - Register the decoder the way `registerAc3Decoder` is registered.
