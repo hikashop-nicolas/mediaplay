@@ -2,6 +2,7 @@ import { decodeSubtitleBytes, extractMkvInfo, subtitleFileToVtt, type MkvAudioTr
 import type { DirectAudioInfo } from "./synced-audio";
 import { strings, type MediaStrings } from "./i18n";
 import type { SyncedAudioHandle } from "./synced-audio";
+import { registerAlacDecoder, setAlacBase } from "./alac-decoder";
 
 // Matroska audio CodecID -> a MIME to probe the browser with. Only the codecs a browser
 // might refuse (the Dolby / DTS family) need probing; everything else (AAC, MP3, Opus,
@@ -64,6 +65,8 @@ export interface MediaPlayerOptions {
   libass?: LibassAssets;
   /** AC-3/E-AC-3 libav decoder assets; `base` is the served dir (default libav/ under baseURI). */
   libav?: { base?: string };
+  /** ALAC decoder assets; `base` is the served dir (default alac/ under baseURI). */
+  alac?: { base?: string };
   /** Embedded mode (host drives the player, e.g. a subtitle editor): suppress the
    * document-level keyboard shortcuts and the CC/tracks button so the host owns both. */
   embedded?: boolean;
@@ -165,6 +168,11 @@ async function remuxWithAudioTrack(blob: Blob, keepTrackId: number): Promise<Blo
  */
 async function tryRemux(blob: Blob, isAudio: boolean): Promise<Blob | null> {
   const mb = await import("mediabunny");
+  // ALAC has no browser decoder outside Safari, so a conversion of one needs ours. This
+  // only registers it; the 21 KB of wasm is fetched by the decoder's own init, and only if
+  // a track actually turns out to be ALAC. On Safari the file plays natively, no error
+  // fires, and this path is never reached at all.
+  registerAlacDecoder();
   const targets = isAudio
     ? [new mb.Mp4OutputFormat(), new mb.OggOutputFormat(), new mb.WavOutputFormat()]
     : [new mb.Mp4OutputFormat(), new mb.WebMOutputFormat()];
@@ -203,6 +211,8 @@ class MediaPlayer implements MediaPlayerHandle {
     this.S = strings(opts.strings);
     this.workerUrl = opts.libass?.workerUrl ?? new URL("octopus/subtitles-octopus-worker.js", document.baseURI).toString();
     this.fontUrl = opts.libass?.fontUrl ?? new URL("octopus/default.woff2", document.baseURI).toString();
+    // Just a string: nothing is fetched until a track actually needs the ALAC decoder.
+    setAlacBase(opts.alac?.base ?? new URL("alac/", document.baseURI).toString());
     this.mount(container, source);
   }
 

@@ -1,5 +1,6 @@
 import { decodeSubtitleBytes, extractMkvInfo, subtitleFileToVtt } from "./mkv";
 import { strings } from "./i18n";
+import { registerAlacDecoder, setAlacBase } from "./alac-decoder";
 // Matroska audio CodecID -> a MIME to probe the browser with. Only the codecs a browser
 // might refuse (the Dolby / DTS family) need probing; everything else (AAC, MP3, Opus,
 // Vorbis, FLAC, PCM) plays. When the browser lacks one of these decoders, an in-memory
@@ -106,6 +107,11 @@ async function remuxWithAudioTrack(blob, keepTrackId) {
  */
 async function tryRemux(blob, isAudio) {
     const mb = await import("mediabunny");
+    // ALAC has no browser decoder outside Safari, so a conversion of one needs ours. This
+    // only registers it; the 21 KB of wasm is fetched by the decoder's own init, and only if
+    // a track actually turns out to be ALAC. On Safari the file plays natively, no error
+    // fires, and this path is never reached at all.
+    registerAlacDecoder();
     const targets = isAudio
         ? [new mb.Mp4OutputFormat(), new mb.OggOutputFormat(), new mb.WavOutputFormat()]
         : [new mb.Mp4OutputFormat(), new mb.WebMOutputFormat()];
@@ -147,6 +153,8 @@ class MediaPlayer {
         this.S = strings(opts.strings);
         this.workerUrl = opts.libass?.workerUrl ?? new URL("octopus/subtitles-octopus-worker.js", document.baseURI).toString();
         this.fontUrl = opts.libass?.fontUrl ?? new URL("octopus/default.woff2", document.baseURI).toString();
+        // Just a string: nothing is fetched until a track actually needs the ALAC decoder.
+        setAlacBase(opts.alac?.base ?? new URL("alac/", document.baseURI).toString());
         this.mount(container, source);
     }
     mount(container, source) {

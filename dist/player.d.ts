@@ -31,6 +31,10 @@ export interface MediaPlayerOptions {
     libav?: {
         base?: string;
     };
+    /** ALAC decoder assets; `base` is the served dir (default alac/ under baseURI). */
+    alac?: {
+        base?: string;
+    };
     /** Embedded mode (host drives the player, e.g. a subtitle editor): suppress the
      * document-level keyboard shortcuts and the CC/tracks button so the host owns both. */
     embedded?: boolean;

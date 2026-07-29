@@ -1,6 +1,9 @@
 node_modules/
 demo-dist/
-dist/
+# The package build output at the root. Anchored, so that it does not also swallow
+# alac/dist, whose contents ship: consumers must not need Emscripten to get the decoder,
+# exactly as the libav/ assets beside them are committed.
+/dist/
 demo/public/
 *.log
 .DS_Store

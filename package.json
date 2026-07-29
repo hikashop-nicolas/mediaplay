@@ -21,7 +21,7 @@
     "build": "tsc -p tsconfig.json",
     "build:demo": "npm run assets && vite build",
     "typecheck": "node node_modules/tsgo/bin/tsc -p tsconfig.json --noEmit",
-    "assets": "node scripts/copy-octopus-assets.mjs && node scripts/copy-libav-assets.mjs",
+    "assets": "node scripts/copy-octopus-assets.mjs && node scripts/copy-libav-assets.mjs && node scripts/copy-alac-assets.mjs",
     "dev": "npm run assets && vite",
     "preview": "vite preview",
     "test": "vitest run",

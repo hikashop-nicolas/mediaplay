@@ -24,6 +24,9 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 
 EXPORTS='["_alac_create","_alac_destroy","_alac_decode","_alac_channels","_alac_bit_depth","_alac_frame_length","_alac_sample_rate","_alac_bytes_per_frame","_malloc","_free"]'
 
+# ENVIRONMENT includes node so the module also loads outside a browser: the test suite
+# decodes the corpus with it, and without node in the list the glue can only fetch the wasm
+# by URL, which does not work from a file path.
 docker run --rm -v "$HERE:/work" -w /work "$IMAGE" emcc \
   src/ALACDecoder.cpp \
   src/ALACBitUtilities.c \
@@ -42,7 +45,7 @@ docker run --rm -v "$HERE:/work" -w /work "$IMAGE" emcc \
   -s MODULARIZE=1 \
   -s EXPORT_ES6=1 \
   -s EXPORT_NAME=createAlacModule \
-  -s ENVIRONMENT=web,worker \
+  -s ENVIRONMENT=web,worker,node \
   -s ALLOW_MEMORY_GROWTH=1 \
   -s FILESYSTEM=0 \
   -s ASSERTIONS=0 \
