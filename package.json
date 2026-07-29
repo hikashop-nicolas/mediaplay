@@ -15,7 +15,8 @@
   },
   "files": [
     "dist",
-    "libav"
+    "libav",
+    "alac"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
