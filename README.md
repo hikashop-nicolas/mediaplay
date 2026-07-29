@@ -7,7 +7,9 @@ multi-GB file never sits in RAM. When the browser can't play the file directly, 
 **without re-encoding**, reading the source from disk as it goes, so the file's data
 stays untouched.
 Audio codecs the browser can't decode at all (**Dolby AC-3 / E-AC-3**) are decoded by a
-bundled FFmpeg WASM decoder and played through Web Audio in sync with the video.
+bundled FFmpeg WASM decoder and played through Web Audio in sync with the video, and
+**Apple Lossless (ALAC)**, which only Safari decodes, by a 21 KB build of Apple's own
+decoder.
 Embedded and external **subtitles** (SRT / ASS / SSA / VTT) are extracted and rendered,
 with styled ASS via [libass](https://github.com/jellyfin/JavascriptSubtitlesOctopus)
 using the fonts embedded in the file. No server, no upload: nothing ever leaves the
@@ -70,6 +72,7 @@ and HEVC where the OS licenses it. There is no software video decoding.
 | AAC, MP3, Opus, Vorbis, FLAC, PCM | Natively by the browser (directly or after remux) |
 | **AC-3, E-AC-3 (Dolby Digital / Plus)** | Bundled FFmpeg WASM decoder → Web Audio, synced to the video |
 | **DTS, TrueHD** | Same bundled decoder, fed from the Matroska reader |
+| **ALAC (Apple Lossless)** | Native on Safari; elsewhere a 21 KB WASM build of Apple's own decoder ([`alac/NOTICE.md`](./alac/NOTICE.md)), fetched only when a file turns out to be ALAC |
 
 Legacy SD containers/codecs (DivX/XviD AVI, MPEG-PS, WMV, FLV) are a planned
 transcode-to-play feature — see [`_plans/LEGACY_FORMATS_PLAN.md`](./_plans/LEGACY_FORMATS_PLAN.md),
@@ -115,6 +118,23 @@ createMediaPlayer(el, source, {
 
 See `scripts/copy-libav-assets.mjs` for the copy step the demo uses. Without these
 assets, AC-3/E-AC-3 files play video-only with an "audio codec unsupported" notice.
+
+## ALAC decoder assets
+
+Apple Lossless decoding uses a WebAssembly build of Apple's own reference decoder
+(21 KB, Apache-2.0 — see `alac/NOTICE.md` for provenance and rebuild instructions). The
+two files ship in this package's `alac/dist/` directory; copy them into your served
+static directory and point the player at them:
+
+```ts
+createMediaPlayer(el, source, {
+  alac: { base: "/assets/alac/" }, // default: alac/ under document.baseURI
+});
+```
+
+See `scripts/copy-alac-assets.mjs` for the copy step the demo uses. Nothing is fetched
+until a file actually turns out to be ALAC, and on Safari, which decodes ALAC natively,
+never at all. Without these assets, ALAC files fail to open on non-Safari browsers.
 
 ## API
 

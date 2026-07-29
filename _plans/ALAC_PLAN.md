@@ -1,6 +1,18 @@
 # ALAC playback (plan)
 
-Status: **done** (2026-07-29). All five phases complete; ALAC plays.
+Status: **done** (2026-07-29). All five phases complete; ALAC plays, and ships in omnitext.
+
+## What nearly shipped broken
+
+Worth recording, because every test passed while it was true: mediaplay's `files` field
+listed only `dist` and `libav`, so `alac/` was excluded from what consumers install.
+omnitext's `node_modules/mediaplay` had no `alac` directory at all, and every ALAC file
+would have 404'd on the decoder. All the verification ran inside this checkout, where the
+files are obviously present, so nothing caught it. Found only by asking whether the feature
+actually reached a user.
+
+The lesson generalises beyond ALAC: a library's tests prove the code works, not that the
+artefacts reach anyone.
 
 ## Where we are
 
@@ -269,6 +281,19 @@ generic path does not currently track.
   fetch the decoder when the browser cannot do it, so most Safari users never download it.
 - Add `A_ALAC` to `MKV_LIBAV_CODECS`' equivalent for the direct path, so ALAC in Matroska
   works through the machinery that already handles DTS and TrueHD.
+
+## Left open, deliberately
+
+- **The upstream PR is written but not sent.** The core demux change is one clean commit on
+  the fork. The sticking point is that ALAC would be mediabunny's first codec it can demux
+  but not encode, which is a design question for them rather than a detail.
+- **24-bit narrows to 16-bit** through the conversion fallback, by one LSB (about -96 dBFS).
+  Judged not worth fixing: inaudible, affects only 24-bit sources on non-Safari browsers,
+  and fixing it makes the memory problem below worse.
+- **The fallback buffers the whole decoded file in RAM.** A CD rip is 42 MB; a 10-minute
+  24/192 track is about 460 MB, with no size guard. Not ALAC-specific (any file falling back
+  to conversion does this), but ALAC made it visible because it is the codec most likely to
+  be both lossless and hi-res. Worth its own look.
 
 ## Risks
 
