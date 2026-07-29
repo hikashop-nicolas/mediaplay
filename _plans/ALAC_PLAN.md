@@ -1,7 +1,6 @@
 # ALAC playback (plan)
 
-Status: **Phases 0 to 3 and 5 done** (2026-07-29). Phase 4 is partly done: the exact
-oracle and the unit tests exist; the Cypress playback test does not.
+Status: **done** (2026-07-29). All five phases complete; ALAC plays.
 
 ## Where we are
 
@@ -241,7 +240,10 @@ after the remap it is exact again.
 That is the centrepiece. Around it:
 
 - Unit tests for cookie parsing (channel count, bit depth, sample rate) per corpus file.
-- A Cypress test that actually plays a file, alongside the existing ones.
+- A Cypress test that actually plays a file. Note for anyone reading the original plan:
+  this said "alongside the existing ones", which was wrong. mediaplay had `cypress` as a
+  devDependency and a `test:e2e` script but **no config and no specs**, and CI never ran
+  it. The suite had to be set up from nothing, so ALAC is its first spec.
 - The 24-bit case specifically: the decoder returns 32-bit containers for 24-bit input,
   and the conversion to Float32 planes is where a scaling error would hide. The
   byte-exact check catches it.

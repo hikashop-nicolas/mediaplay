@@ -15,7 +15,20 @@ jobs:
         with:
           node-version: "24"
           cache: npm
-      - run: npm ci
+      # npm ci reaches the registry and GitHub for the git-hosted mediabunny fork, and a
+      # timeout there is the commonest cause of a failed run that has nothing wrong with it.
+      - name: Install dependencies
+        run: |
+          for attempt in 1 2 3; do
+            npm ci && exit 0
+            echo "npm ci failed (attempt $attempt), retrying in $((attempt * 15))s"
+            sleep $((attempt * 15))
+          done
+          echo "npm ci failed after 3 attempts"
+          exit 1
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      # The only check that a browser actually decodes and plays what mediaplay produces;
+      # everything above runs in node and can only prove the bytes are right.
+      - run: npm run test:e2e
