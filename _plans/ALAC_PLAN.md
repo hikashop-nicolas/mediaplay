@@ -1,6 +1,6 @@
 # ALAC playback (plan)
 
-Status: **Phase 0 done** (2026-07-29). Phases 1 to 5 not started.
+Status: **Phases 0 and 1 done** (2026-07-29). Phases 2 to 5 not started.
 
 ## Where we are
 
@@ -86,16 +86,31 @@ rather than here.
 Still worth keeping **one real-world album track** outside the repo as a confidence check,
 for the cover art, chapters and odd tagging a generated corpus will not have.
 
+### Built, and verified against the manifest
+
+`npm run corpus:alac` generates it; `npm run check:alac-corpus` proves it. Five fixtures,
+321KB committed, each 0.5s (still six 4096-frame packets, so multi-packet decoding is
+exercised without megabytes in the repository).
+
+The check decodes every fixture with a decoder we did not write and asserts each channel
+reproduces its source tone **sample for sample**. It also *discovers* the channel
+permutation rather than assuming it: each channel carries its own frequency, so for every
+decoded channel it asks which source tone that channel reproduces exactly. One must match,
+and each must be claimed once, which proves losslessness and yields the ordering together.
+Verified non-vacuous: perturbing one sample in ~22,000 fails every fixture.
+
 ### Channel order is not WAV order
 
 Confirmed by round-tripping the 5.1 fixture and identifying each channel by its tone, not
 by trusting the metadata:
 
 ```
-WAV / SMPTE order:  L   R   C   LFE  Ls  Rs
-ALAC order:         C   L   R   Ls   Rs  LFE
-ALAC index -> WAV:  2   0   1   4    5   3
+5.1  WAV order:  L R C LFE Ls Rs          ALAC -> source: [2, 0, 1, 4, 5, 3]
+7.1  (MPEG_7_1_A)                          ALAC -> source: [2, 6, 7, 0, 1, 4, 5, 3]
 ```
+
+The 5.1 mapping was measured twice by independent means (by hand from a round trip, then
+by the corpus check) and agrees.
 
 So a multichannel ALAC decode that looks "right" on a level meter can still have the
 centre channel in the left speaker. The remap is small and now known; the fixtures test it.

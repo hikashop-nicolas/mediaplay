@@ -26,7 +26,9 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:e2e": "npm run build:demo && start-server-and-test 'vite preview --port 5173 --strictPort' http://localhost:5173 'cypress run --browser chrome'",
-    "prepare": "tsc -p tsconfig.json"
+    "prepare": "tsc -p tsconfig.json",
+    "corpus:alac": "node scripts/gen-alac-corpus.mjs",
+    "check:alac-corpus": "node scripts/check-alac-corpus.mjs"
   },
   "dependencies": {
     "@jellyfin/libass-wasm": "^4.2.4",

@@ -1,0 +1,81 @@
+[
+  {
+    "name": "stereo-16",
+    "rate": 44100,
+    "bits": 16,
+    "freqs": [
+      440,
+      660
+    ],
+    "seconds": 0.5,
+    "layout": null,
+    "file": "stereo-16.m4a",
+    "channels": 2,
+    "frames": 22050
+  },
+  {
+    "name": "mono-16",
+    "rate": 44100,
+    "bits": 16,
+    "freqs": [
+      523
+    ],
+    "seconds": 0.5,
+    "layout": null,
+    "file": "mono-16.m4a",
+    "channels": 1,
+    "frames": 22050
+  },
+  {
+    "name": "stereo-24",
+    "rate": 96000,
+    "bits": 24,
+    "freqs": [
+      440,
+      660
+    ],
+    "seconds": 0.5,
+    "layout": null,
+    "file": "stereo-24.m4a",
+    "channels": 2,
+    "frames": 48000
+  },
+  {
+    "name": "surround-51",
+    "rate": 48000,
+    "bits": 16,
+    "freqs": [
+      220,
+      277,
+      330,
+      392,
+      440,
+      523
+    ],
+    "seconds": 0.5,
+    "layout": "MPEG_5_1_A",
+    "file": "surround-51.m4a",
+    "channels": 6,
+    "frames": 24000
+  },
+  {
+    "name": "surround-71",
+    "rate": 48000,
+    "bits": 16,
+    "freqs": [
+      200,
+      260,
+      320,
+      380,
+      440,
+      500,
+      560,
+      620
+    ],
+    "seconds": 0.5,
+    "layout": "MPEG_7_1_A",
+    "file": "surround-71.m4a",
+    "channels": 8,
+    "frames": 24000
+  }
+]
