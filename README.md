@@ -15,6 +15,13 @@ with styled ASS via [libass](https://github.com/jellyfin/JavascriptSubtitlesOcto
 using the fonts embedded in the file. No server, no upload: nothing ever leaves the
 browser.
 
+**[▶ Live demo](https://hikashop-nicolas.github.io/mediaplay/)** — drop an audio or video
+file and play it.
+
+Used in production by **[Omnitext](https://hikashop-nicolas.github.io/omnitext/)**, a free
+browser editor for practically any file, as its media player, and by
+[subedit](https://github.com/hikashop-nicolas/subedit) for subtitle preview.
+
 ```ts
 import { createMediaPlayer } from "mediaplay";
 
