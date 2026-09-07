@@ -150,7 +150,7 @@ never at all. Without these assets, ALAC files fail to open on non-Safari browse
     `blob` (a `File`, streamed from disk) or `bytes` (already in memory); one or the other.
   - `options: { onError?; strings?; libass?: { workerUrl?, fontUrl?, fonts? }; libav?: { base? }; embedded? }`
   - `handle: { getMediaElement(); setSubtitleText(content, filename); getBytes(); focus(); destroy() }`
-- `setLocale(code)` / `strings(override?)` — built-in i18n (English, French, Japanese);
+- `setLocale(code)` / `strings(override?)` — built-in i18n (English, French, Japanese, Spanish, German, Portuguese, Russian and Simplified Chinese);
   a host with its own translations passes `options.strings` to override individual labels.
 - Subtitle helpers, usable headlessly: `extractMkvInfo`, `extractMkvSubtitles`,
   `subtitleFileToVtt`, `decodeSubtitleBytes`, `srtToVtt`, `assFileToVtt`.
