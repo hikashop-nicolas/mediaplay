@@ -59,7 +59,77 @@ const ja: MediaStrings = {
   audioTracks: "音声",
 };
 
-const LOCALES: Record<string, MediaStrings> = { en, fr, ja };
+const es: MediaStrings = {
+  mediaKeys: "Espacio: reproducir/pausar · F: pantalla completa · M: silenciar · S/D: velocidad · C: subtítulos · ← →: avanzar/retroceder · ↑ ↓: volumen",
+  mediaKeysAudio: "Espacio: reproducir/pausar · M: silenciar · S/D: velocidad · ← →: avanzar/retroceder · ↑ ↓: volumen",
+  mediaUnsupported: "Su navegador no admite este formato multimedia.",
+  mediaAudioUnsupported: "El vídeo se reproduce sin sonido: su pista de audio usa un códec que su navegador no sabe descodificar (por ejemplo Dolby AC-3/E-AC-3 o DTS).",
+  mediaEmpty: "No hay nada que reproducir.",
+  mediaConverting: "Convirtiendo para la reproducción…",
+  tracksMenu: "Pistas de subtítulos y de audio",
+  subtitles: "Subtítulos",
+  subtitlesOff: "Desactivados",
+  loadSubtitles: "Cargar un archivo de subtítulos…",
+  audioTracks: "Audio",
+};
+
+const de: MediaStrings = {
+  mediaKeys: "Leertaste: Wiedergabe/Pause · F: Vollbild · M: stumm · S/D: Geschwindigkeit · C: Untertitel · ← →: spulen · ↑ ↓: Lautstärke",
+  mediaKeysAudio: "Leertaste: Wiedergabe/Pause · M: stumm · S/D: Geschwindigkeit · ← →: spulen · ↑ ↓: Lautstärke",
+  mediaUnsupported: "Dieses Medienformat unterstützt Ihr Browser nicht.",
+  mediaAudioUnsupported: "Das Video läuft ohne Ton: Seine Tonspur verwendet einen Codec, den Ihr Browser nicht dekodieren kann (etwa Dolby AC-3/E-AC-3 oder DTS).",
+  mediaEmpty: "Nichts abzuspielen.",
+  mediaConverting: "Wird für die Wiedergabe umgewandelt…",
+  tracksMenu: "Untertitel- und Tonspuren",
+  subtitles: "Untertitel",
+  subtitlesOff: "Aus",
+  loadSubtitles: "Untertiteldatei laden…",
+  audioTracks: "Ton",
+};
+
+const pt: MediaStrings = {
+  mediaKeys: "Espaço: reproduzir/pausar · F: ecrã inteiro · M: silenciar · S/D: velocidade · C: legendas · ← →: avançar/recuar · ↑ ↓: volume",
+  mediaKeysAudio: "Espaço: reproduzir/pausar · M: silenciar · S/D: velocidade · ← →: avançar/recuar · ↑ ↓: volume",
+  mediaUnsupported: "O seu navegador não suporta este formato multimédia.",
+  mediaAudioUnsupported: "O vídeo está a ser reproduzido sem som: a faixa de áudio usa um codec que o seu navegador não sabe descodificar (por exemplo Dolby AC-3/E-AC-3 ou DTS).",
+  mediaEmpty: "Não há nada para reproduzir.",
+  mediaConverting: "A converter para reprodução…",
+  tracksMenu: "Faixas de legendas e de áudio",
+  subtitles: "Legendas",
+  subtitlesOff: "Desativadas",
+  loadSubtitles: "Carregar um ficheiro de legendas…",
+  audioTracks: "Áudio",
+};
+
+const ru: MediaStrings = {
+  mediaKeys: "Пробел: воспроизведение/пауза · F: во весь экран · M: без звука · S/D: скорость · C: субтитры · ← →: перемотка · ↑ ↓: громкость",
+  mediaKeysAudio: "Пробел: воспроизведение/пауза · M: без звука · S/D: скорость · ← →: перемотка · ↑ ↓: громкость",
+  mediaUnsupported: "Ваш браузер не поддерживает этот медиаформат.",
+  mediaAudioUnsupported: "Видео идёт без звука: его звуковая дорожка использует кодек, который ваш браузер не может декодировать (например, Dolby AC-3/E-AC-3 или DTS).",
+  mediaEmpty: "Нечего воспроизводить.",
+  mediaConverting: "Преобразование для воспроизведения…",
+  tracksMenu: "Дорожки субтитров и звука",
+  subtitles: "Субтитры",
+  subtitlesOff: "Выключены",
+  loadSubtitles: "Загрузить файл субтитров…",
+  audioTracks: "Звук",
+};
+
+const zh: MediaStrings = {
+  mediaKeys: "空格：播放/暂停 · F：全屏 · M：静音 · S/D：速度 · C：字幕 · ← →：快进/快退 · ↑ ↓：音量",
+  mediaKeysAudio: "空格：播放/暂停 · M：静音 · S/D：速度 · ← →：快进/快退 · ↑ ↓：音量",
+  mediaUnsupported: "您的浏览器不支持此媒体格式。",
+  mediaAudioUnsupported: "视频正在无声播放：其音轨使用了您的浏览器无法解码的编解码器（例如 Dolby AC-3/E-AC-3 或 DTS）。",
+  mediaEmpty: "没有可播放的内容。",
+  mediaConverting: "正在转换以便播放…",
+  tracksMenu: "字幕和音轨",
+  subtitles: "字幕",
+  subtitlesOff: "关闭",
+  loadSubtitles: "加载字幕文件…",
+  audioTracks: "音频",
+};
+
+const LOCALES: Record<string, MediaStrings> = { en, fr, ja, es, de, pt, ru, zh };
 
 let active: MediaStrings = en;
 
