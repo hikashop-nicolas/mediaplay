@@ -23,12 +23,15 @@ may replace these files with your own libav.js build of the same interface.
 
 ## Rebuilding
 
+Built with Emscripten 5.0.0 (pinned: the same version gives a byte-identical result, which is how
+Omnitext's F-Droid build reproduces these files from source).
+
 ```
-# in a checkout of https://github.com/Yahweasel/libav.js
+# in a checkout of https://github.com/Yahweasel/libav.js at tag v6.9.8.1
 cd configs
 node mkconfig.js audio '["avcodec","decoder-eac3","decoder-ac3","parser-ac3","decoder-dca","parser-dca","decoder-truehd","decoder-mlp","parser-mlp"]'
 cd ..
-docker build -f Dockerfile.development -t libavjs-dev .
-docker run --rm -v "$PWD:/src" -w /src libavjs-dev bash -lc 'make -j"$(nproc)" build-audio'
-# then copy dist/libav-<ver>-audio.mjs, .wasm.mjs, .wasm.wasm here
+docker run --rm -v "$PWD:/src" -w /src emscripten/emsdk:5.0.0 \
+  bash -lc 'apt-get update && apt-get install -y pkg-config && make -j"$(nproc)" build-audio'
+# then copy dist/libav-6.9.8.1-audio.mjs, .wasm.mjs, .wasm.wasm here
 ```
