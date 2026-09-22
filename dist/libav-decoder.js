@@ -24,7 +24,9 @@ function loadLibav() {
         // ff_decode_multi is a postMessage round-trip, which drags throughput below realtime;
         // direct calls decode at ~80x realtime (measured), easily keeping ahead of playback.
         libavPromise = importLibavLoader()
-            .then((factory) => factory.LibAV({ base: libavBase, noworker: true }))
+            // libav.js joins base + "/libav-...", so give it the base without its trailing slash:
+            // "libav//libav-..." is a 404 on Android's app server (Capacitor), which silenced AC-3.
+            .then((factory) => factory.LibAV({ base: libavBase.replace(/\/+$/, ""), noworker: true }))
             .catch((e) => {
             // Don't cache the failure. A single failed dynamic import (e.g. a transient hiccup
             // or a Vite dep re-optimize race in dev) would otherwise poison libavPromise and
