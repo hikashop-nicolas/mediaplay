@@ -7,6 +7,10 @@
 # needs running to change them.
 #
 # Usage: ./alac/build.sh
+#
+# ALAC_EMCC=emcc runs a local Emscripten instead (it must be 4.0.7 for a byte-identical build):
+# F-Droid's build servers have no Docker, and Omnitext's F-Droid script activates the pinned
+# emsdk itself before calling this.
 set -e
 
 IMAGE="emscripten/emsdk:4.0.7"
@@ -27,7 +31,14 @@ EXPORTS='["_alac_create","_alac_destroy","_alac_decode","_alac_channels","_alac_
 # ENVIRONMENT includes node so the module also loads outside a browser: the test suite
 # decodes the corpus with it, and without node in the list the glue can only fetch the wasm
 # by URL, which does not work from a file path.
-docker run --rm -v "$HERE:/work" -w /work "$IMAGE" emcc \
+if [ -n "$ALAC_EMCC" ]; then
+  cd "$HERE"
+  RUN="$ALAC_EMCC"
+else
+  RUN="docker run --rm -v $HERE:/work -w /work $IMAGE emcc"
+fi
+
+$RUN \
   src/ALACDecoder.cpp \
   src/ALACBitUtilities.c \
   src/ag_dec.c \
