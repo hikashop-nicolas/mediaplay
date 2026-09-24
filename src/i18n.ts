@@ -15,6 +15,7 @@ export type MediaStrings = {
   subtitlesOff: string;
   loadSubtitles: string;
   audioTracks: string;
+  fullscreen: string;
 };
 
 const en: MediaStrings = {
@@ -29,6 +30,7 @@ const en: MediaStrings = {
   subtitlesOff: "Off",
   loadSubtitles: "Load subtitle file…",
   audioTracks: "Audio",
+  fullscreen: "Fullscreen",
 };
 
 const fr: MediaStrings = {
@@ -43,6 +45,7 @@ const fr: MediaStrings = {
   subtitlesOff: "Désactivés",
   loadSubtitles: "Charger un fichier de sous-titres…",
   audioTracks: "Audio",
+  fullscreen: "Plein écran",
 };
 
 const ja: MediaStrings = {
@@ -57,6 +60,7 @@ const ja: MediaStrings = {
   subtitlesOff: "オフ",
   loadSubtitles: "字幕ファイルを読み込む…",
   audioTracks: "音声",
+  fullscreen: "全画面",
 };
 
 const es: MediaStrings = {
@@ -71,6 +75,7 @@ const es: MediaStrings = {
   subtitlesOff: "Desactivados",
   loadSubtitles: "Cargar un archivo de subtítulos…",
   audioTracks: "Audio",
+  fullscreen: "Pantalla completa",
 };
 
 const de: MediaStrings = {
@@ -85,6 +90,7 @@ const de: MediaStrings = {
   subtitlesOff: "Aus",
   loadSubtitles: "Untertiteldatei laden…",
   audioTracks: "Ton",
+  fullscreen: "Vollbild",
 };
 
 const pt: MediaStrings = {
@@ -99,6 +105,7 @@ const pt: MediaStrings = {
   subtitlesOff: "Desativadas",
   loadSubtitles: "Carregar um ficheiro de legendas…",
   audioTracks: "Áudio",
+  fullscreen: "Ecrã inteiro",
 };
 
 const ru: MediaStrings = {
@@ -113,6 +120,7 @@ const ru: MediaStrings = {
   subtitlesOff: "Выключены",
   loadSubtitles: "Загрузить файл субтитров…",
   audioTracks: "Звук",
+  fullscreen: "Во весь экран",
 };
 
 const zh: MediaStrings = {
@@ -127,6 +135,7 @@ const zh: MediaStrings = {
   subtitlesOff: "关闭",
   loadSubtitles: "加载字幕文件…",
   audioTracks: "音频",
+  fullscreen: "全屏",
 };
 
 const LOCALES: Record<string, MediaStrings> = { en, fr, ja, es, de, pt, ru, zh };

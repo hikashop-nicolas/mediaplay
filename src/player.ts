@@ -118,6 +118,10 @@ function ensureStyles(): void {
       padding:6px 10px; border:1px solid rgba(255,255,255,0.25); border-radius:8px; cursor:pointer;
       transition:opacity .25s; }
     .ot-media-tracksbtn:hover { background:rgba(50,50,58,0.9); }
+    .ot-media-fsbtn { left:84px; font-size:15px; line-height:1; padding:5px 9px; }
+    /* The native button fullscreens the bare video, where the styled-subtitle canvas
+       cannot follow; ours fullscreens the whole player instead (only where we can). */
+    .ot-media-ownfs video::-webkit-media-controls-fullscreen-button { display:none; }
     /* Fullscreen with an idle mouse: hide our chrome like the native controls do. */
     .ot-media.ot-media-idle { cursor:none; }
     .ot-media.ot-media-idle .ot-media-tracksbtn { opacity:0; pointer-events:none; }
@@ -781,6 +785,18 @@ class MediaPlayer implements MediaPlayerHandle {
           wrap.appendChild(btn);
           wrap.appendChild(menu);
         }
+        // Replaces the native fullscreen button (hidden in CSS): that one fullscreens the
+        // bare video, which leaves styled subtitles behind; this one takes the player.
+        const ownFs = !!document.fullscreenEnabled && !!wrap.requestFullscreen;
+        if (ownFs) wrap.classList.add("ot-media-ownfs");
+        const fsBtn = document.createElement("button");
+        fsBtn.type = "button";
+        fsBtn.className = "ot-media-tracksbtn ot-media-fsbtn";
+        fsBtn.textContent = "⛶";
+        fsBtn.title = S.fullscreen;
+        if (this.opts.embedded) fsBtn.style.left = "14px";
+        fsBtn.addEventListener("click", toggleFullscreen);
+        if (ownFs) wrap.appendChild(fsBtn); // iPhone keeps the native one: no element fullscreen there
         wrap.appendChild(fileInput);
       }
       const stage = document.createElement("div");
