@@ -720,24 +720,44 @@ class MediaPlayer implements MediaPlayerHandle {
           scrubAt = t;
           render();
         };
+        // The drag is tracked by pointer id rather than by the capture state: if capture
+        // is refused, the drag still ends properly instead of sticking to the pointer.
+        let scrubId = -1;
         timeline.addEventListener("pointerdown", (e) => {
-          timeline.setPointerCapture(e.pointerId);
+          scrubId = e.pointerId;
+          try {
+            timeline.setPointerCapture(e.pointerId);
+          } catch {
+            /* capture refused: the window listeners below still finish the drag */
+          }
           e.preventDefault(); // no text selection, and no drag of the bar itself
           closeAllPops(); // preventDefault also swallows the click that would close them
           aimAt(e.clientX);
         });
-        timeline.addEventListener("pointermove", (e) => {
-          if (timeline.hasPointerCapture(e.pointerId)) aimAt(e.clientX);
-        });
+        const moveScrub = (e: PointerEvent) => {
+          if (e.pointerId === scrubId) aimAt(e.clientX);
+        };
         const endScrub = (e: PointerEvent) => {
-          if (!timeline.hasPointerCapture(e.pointerId)) return;
-          timeline.releasePointerCapture(e.pointerId);
+          if (e.pointerId !== scrubId) return;
+          scrubId = -1;
+          try {
+            timeline.releasePointerCapture(e.pointerId);
+          } catch {
+            /* never captured */
+          }
           if (scrubAt >= 0) m.currentTime = scrubAt;
           scrubAt = -1;
           render();
         };
-        timeline.addEventListener("pointerup", endScrub);
-        timeline.addEventListener("pointercancel", endScrub);
+        timeline.addEventListener("pointermove", moveScrub);
+        window.addEventListener("pointermove", moveScrub); // drag beyond the bar
+        window.addEventListener("pointerup", endScrub);
+        window.addEventListener("pointercancel", endScrub);
+        this.teardown.push(() => {
+          window.removeEventListener("pointermove", moveScrub);
+          window.removeEventListener("pointerup", endScrub);
+          window.removeEventListener("pointercancel", endScrub);
+        });
         this.teardown.push(stopLoop);
         return el;
       };
