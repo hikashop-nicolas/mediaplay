@@ -157,7 +157,7 @@ function ensureStyles(): void {
     .ot-media-preview { position:absolute; bottom:22px; transform:translateX(-50%); pointer-events:none;
       display:flex; flex-direction:column; align-items:center; gap:3px; padding:4px;
       background:rgba(20,20,24,0.92); border:1px solid rgba(255,255,255,0.25); border-radius:8px; }
-    .ot-media-preview canvas { display:block; width:160px; height:auto; border-radius:4px; background:#000; }
+    .ot-media-preview canvas { display:block; width:min(160px, 38vw); height:auto; border-radius:4px; background:#000; }
     .ot-media-preview span { font:600 11px system-ui, sans-serif; color:#fff; font-variant-numeric:tabular-nums; }
     .ot-media-clock { flex:none; font-variant-numeric:tabular-nums; white-space:nowrap; }
     .ot-media-vol { flex:0 1 80px; width:80px; min-width:0; accent-color:#fff; }
@@ -618,8 +618,11 @@ class MediaPlayer implements MediaPlayerHandle {
           const r = timeline.getBoundingClientRect();
           hoverAt = t;
           preview.hidden = false;
-          const half = Math.min(84, r.width / 2); // keep the preview inside the bar
-          preview.style.left = `${Math.min(r.width - half, Math.max(half, clientX - r.left))}px`;
+          // Clamp against the bar: on a phone the timeline is narrower than the preview.
+          const box = (preview.parentElement?.parentElement ?? timeline).getBoundingClientRect();
+          const half = preview.offsetWidth / 2 || 85;
+          const x = Math.min(box.right - 4 - half, Math.max(box.left + 4 + half, clientX));
+          preview.style.left = `${x - r.left}px`;
           stamp.textContent = fmtClock(t);
           if (!thumbsAsked) {
             thumbsAsked = true;
@@ -635,6 +638,10 @@ class MediaPlayer implements MediaPlayerHandle {
         if (wantThumbs) {
           timeline.addEventListener("pointermove", (e) => hover(e.clientX));
           timeline.addEventListener("pointerleave", () => (preview.hidden = true));
+          for (const ev of ["pointerup", "pointercancel"])
+            timeline.addEventListener(ev, (e) => {
+              if ((e as PointerEvent).pointerType !== "mouse") preview.hidden = true;
+            });
         }
 
         // Scrubbing: pointer capture so a drag keeps seeking outside the bar's box.
@@ -784,11 +791,19 @@ class MediaPlayer implements MediaPlayerHandle {
           window.clearTimeout(clickTimer); // the two clicks must not also toggle playback
           toggleFullscreen();
         });
-        // Click the picture to play/pause, delayed so a double click only fullscreens.
+        // Click the picture to play/pause, delayed so a double click only fullscreens. A
+        // touch tap shows or hides the bar instead, as every phone player does.
         let clickTimer = 0;
+        let touched = false;
+        m.addEventListener("pointerdown", (e) => (touched = e.pointerType !== "mouse"));
         m.addEventListener("click", () => {
           if (!bar) return;
           window.clearTimeout(clickTimer);
+          if (touched) {
+            if (wrap.classList.contains("ot-media-idle")) poke();
+            else wrap.classList.add("ot-media-idle");
+            return;
+          }
           clickTimer = window.setTimeout(togglePlay, 220);
         });
 
