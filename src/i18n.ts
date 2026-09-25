@@ -22,6 +22,7 @@ export type MediaStrings = {
   unmute: string;
   volume: string;
   timeline: string;
+  speed: string;
 };
 
 const en: MediaStrings = {
@@ -42,7 +43,7 @@ const en: MediaStrings = {
   mute: "Mute",
   unmute: "Unmute",
   volume: "Volume",
-  timeline: "Timeline",
+  timeline: "Timeline",  speed: "Speed",
 };
 
 const fr: MediaStrings = {
@@ -63,7 +64,7 @@ const fr: MediaStrings = {
   mute: "Couper le son",
   unmute: "Rétablir le son",
   volume: "Volume",
-  timeline: "Barre de progression",
+  timeline: "Barre de progression",  speed: "Vitesse",
 };
 
 const ja: MediaStrings = {
@@ -84,7 +85,7 @@ const ja: MediaStrings = {
   mute: "ミュート",
   unmute: "ミュート解除",
   volume: "音量",
-  timeline: "シークバー",
+  timeline: "シークバー",  speed: "再生速度",
 };
 
 const es: MediaStrings = {
@@ -105,7 +106,7 @@ const es: MediaStrings = {
   mute: "Silenciar",
   unmute: "Activar el sonido",
   volume: "Volumen",
-  timeline: "Barra de progreso",
+  timeline: "Barra de progreso",  speed: "Velocidad",
 };
 
 const de: MediaStrings = {
@@ -126,7 +127,7 @@ const de: MediaStrings = {
   mute: "Stummschalten",
   unmute: "Ton einschalten",
   volume: "Lautstärke",
-  timeline: "Zeitleiste",
+  timeline: "Zeitleiste",  speed: "Geschwindigkeit",
 };
 
 const pt: MediaStrings = {
@@ -147,7 +148,7 @@ const pt: MediaStrings = {
   mute: "Silenciar",
   unmute: "Ativar o som",
   volume: "Volume",
-  timeline: "Barra de progresso",
+  timeline: "Barra de progresso",  speed: "Velocidade",
 };
 
 const ru: MediaStrings = {
@@ -168,7 +169,7 @@ const ru: MediaStrings = {
   mute: "Выключить звук",
   unmute: "Включить звук",
   volume: "Громкость",
-  timeline: "Шкала времени",
+  timeline: "Шкала времени",  speed: "Скорость",
 };
 
 const zh: MediaStrings = {
@@ -189,7 +190,7 @@ const zh: MediaStrings = {
   mute: "静音",
   unmute: "取消静音",
   volume: "音量",
-  timeline: "进度条",
+  timeline: "进度条",  speed: "播放速度",
 };
 
 const LOCALES: Record<string, MediaStrings> = { en, fr, ja, es, de, pt, ru, zh };
