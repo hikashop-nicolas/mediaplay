@@ -44,6 +44,8 @@ explicitly asks for them not to appear in subedit.
 
 ## Steps
 
+All four done 2026-09-25 (1e01b43, a0eb4aa, 86bf5f7, e37cdf2).
+
 1. The bar itself, video only, behind a `controls` option ("own" | "native"), native staying
    available as the fallback and for audio. Play/pause, scrubber with the buffered ranges,
    current time and duration, volume with mute, idle auto-hide, click to play/pause.
