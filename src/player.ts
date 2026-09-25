@@ -3,6 +3,7 @@ import type { DirectAudioInfo } from "./synced-audio";
 import { strings, type MediaStrings } from "./i18n";
 import type { SyncedAudioHandle } from "./synced-audio";
 import { registerAlacDecoder, setAlacBase } from "./alac-decoder";
+import type { Thumbnailer } from "./thumbs";
 
 // Matroska audio CodecID -> a MIME to probe the browser with. Only the codecs a browser
 // might refuse (the Dolby / DTS family) need probing; everything else (AAC, MP3, Opus,
@@ -73,6 +74,9 @@ export interface MediaPlayerOptions {
   /** Video control bar: ours (default) or the browser's. Ours looks the same everywhere and
    * owns its timeline. Audio, and embedded mode, default to the native bar. */
   controls?: "own" | "native";
+  /** Hover previews on our timeline (video, our bar only). Default: on, off when embedded,
+   * where the host has its own timeline. */
+  thumbnails?: boolean;
 }
 
 export interface MediaPlayerHandle {
@@ -145,6 +149,11 @@ function ensureStyles(): void {
     .ot-media-played { background:#e2483d; }
     .ot-media-knob { position:absolute; top:2px; left:0; width:12px; height:12px; margin-left:-6px;
       border-radius:50%; background:#e2483d; }
+    .ot-media-preview { position:absolute; bottom:22px; transform:translateX(-50%); pointer-events:none;
+      display:flex; flex-direction:column; align-items:center; gap:3px; padding:4px;
+      background:rgba(20,20,24,0.92); border:1px solid rgba(255,255,255,0.25); border-radius:8px; }
+    .ot-media-preview canvas { display:block; width:160px; height:auto; border-radius:4px; background:#000; }
+    .ot-media-preview span { font:600 11px system-ui, sans-serif; color:#fff; font-variant-numeric:tabular-nums; }
     .ot-media-clock { flex:none; font-variant-numeric:tabular-nums; white-space:nowrap; }
     .ot-media-vol { flex:0 1 80px; width:80px; min-width:0; accent-color:#fff; }
     .ot-media-menu { position:absolute; top:44px; left:14px; z-index:3; min-width:200px;
@@ -542,11 +551,83 @@ class MediaPlayer implements MediaPlayerHandle {
         renderState();
         render();
 
+        // Hover preview: the frame under the pointer, decoded from the source bytes.
+        const preview = document.createElement("div");
+        preview.className = "ot-media-preview";
+        preview.hidden = true;
+        const shot = document.createElement("canvas");
+        const shotCtx = shot.getContext("2d");
+        const stamp = document.createElement("span");
+        preview.append(shot, stamp);
+        timeline.appendChild(preview);
+        const wantThumbs = this.opts.thumbnails ?? !this.opts.embedded;
+        let thumbs: Thumbnailer | null = null;
+        let thumbsAsked = false;
+        let hoverAt = -1;
+        let painting = false;
+        let prefetched = false;
+        const paint = async () => {
+          if (painting) return;
+          painting = true;
+          try {
+            while (thumbs && !preview.hidden) {
+              const t = hoverAt;
+              const frame = await thumbs.get(t);
+              if (preview.hidden) break;
+              if (hoverAt !== t) continue; // moved on while decoding: draw where we are now
+              if (frame) {
+                shot.width = frame.width;
+                shot.height = frame.height;
+                shotCtx?.drawImage(frame, 0, 0);
+                // Warm the rest of the timeline only once the hovered frame is on screen:
+                // the decoder is single-file, and the pointer must not queue behind it.
+                if (!prefetched && Number.isFinite(m.duration)) {
+                  prefetched = true;
+                  void thumbs.prefetch(m.duration);
+                }
+                break;
+              }
+              await new Promise((r) => window.setTimeout(r, 100)); // a decode is running
+            }
+          } finally {
+            painting = false;
+          }
+        };
+        const timeAt = (clientX: number): number | null => {
+          const r = timeline.getBoundingClientRect();
+          if (!r.width || !Number.isFinite(m.duration)) return null;
+          return Math.min(m.duration, Math.max(0, ((clientX - r.left) / r.width) * m.duration));
+        };
+        const hover = (clientX: number) => {
+          const t = timeAt(clientX);
+          if (t === null) return;
+          const r = timeline.getBoundingClientRect();
+          hoverAt = t;
+          preview.hidden = false;
+          const half = Math.min(84, r.width / 2); // keep the preview inside the bar
+          preview.style.left = `${Math.min(r.width - half, Math.max(half, clientX - r.left))}px`;
+          stamp.textContent = fmtClock(t);
+          if (!thumbsAsked) {
+            thumbsAsked = true;
+            void import("./thumbs").then(async ({ createThumbnailer }) => {
+              if (!this.wrap || !srcBlob) return;
+              thumbs = await createThumbnailer(srcBlob);
+              this.teardown.push(() => thumbs?.destroy());
+              void paint();
+            });
+          }
+          void paint();
+        };
+        if (wantThumbs) {
+          timeline.addEventListener("pointermove", (e) => hover(e.clientX));
+          timeline.addEventListener("pointerleave", () => (preview.hidden = true));
+        }
+
         // Scrubbing: pointer capture so a drag keeps seeking outside the bar's box.
         const seekTo = (clientX: number) => {
-          const r = timeline.getBoundingClientRect();
-          if (!r.width || !Number.isFinite(m.duration)) return;
-          m.currentTime = Math.min(m.duration, Math.max(0, ((clientX - r.left) / r.width) * m.duration));
+          const t = timeAt(clientX);
+          if (t === null) return;
+          m.currentTime = t;
           render();
         };
         timeline.addEventListener("pointerdown", (e) => {

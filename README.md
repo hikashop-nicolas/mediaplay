@@ -56,9 +56,14 @@ handle.destroy();
   (Shift_JIS, EUC-KR, GB18030, Windows-1252) auto-detected.
 - **Audio-track switching** for files with multiple embedded audio tracks (by in-memory
   stream-copy remux, or by restarting the decoder in decoded-audio mode).
+- **Its own control bar** (video): play/pause, a timeline with the buffered ranges, clock,
+  volume, the tracks menu (subtitles, audio, speed) and fullscreen. Hovering the timeline
+  shows the frame under the pointer, decoded from the source bytes, so it also works for
+  files the browser cannot play natively. `controls: "native"` keeps the browser's bar,
+  `thumbnails: false` drops the hover previews.
 - **Keyboard controls:** `Space`/`K` play-pause, `F` fullscreen, `M` mute, `S`/`D`
   speed, `C` subtitles, `←`/`→` seek, `↑`/`↓` volume, `Home`/`End` jump. Shortcuts keep
-  working even when the native controls (e.g. the timeline) have focus.
+  working wherever focus sits in the player.
 
 ## Supported formats
 
