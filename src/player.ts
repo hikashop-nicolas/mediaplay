@@ -100,7 +100,8 @@ function ensureStyles(): void {
   s.id = STYLE_ID;
   s.textContent = `
     .ot-media { height:100%; overflow:auto; background:#000; position:relative;
-      display:flex; align-items:center; justify-content:center; outline:none; }
+      display:flex; align-items:center; justify-content:center; outline:none;
+      user-select:none; -webkit-user-select:none; -webkit-tap-highlight-color:transparent; }
     /* Column: the bar sits under the picture, where it needs no tap to appear. In
        fullscreen it goes back to floating over the video, like every player does. */
     .ot-media-stage { position:relative; display:flex; flex-direction:column; max-width:100%; max-height:100%; }
@@ -128,7 +129,9 @@ function ensureStyles(): void {
       background:rgba(20,20,24,0.85); color:#fff; font:600 13px system-ui, sans-serif;
       padding:6px 10px; border:1px solid rgba(255,255,255,0.25); border-radius:8px; cursor:pointer;
       transition:opacity .25s; }
-    .ot-media-tracksbtn:hover { background:rgba(50,50,58,0.9); }
+    /* Only where a pointer can actually hover: on a touch screen :hover sticks after a
+       tap, leaving a grey block on the button that was last pressed. */
+    @media (hover: hover) { .ot-media-tracksbtn:hover { background:rgba(50,50,58,0.9); } }
     .ot-media-fsbtn { left:84px; font-size:15px; line-height:1; padding:5px 9px; }
     /* The native button fullscreens the bare video, where the styled-subtitle canvas
        cannot follow; ours fullscreens the whole player instead (only where we can). */
@@ -145,7 +148,7 @@ function ensureStyles(): void {
       padding:14px 12px 8px; background:linear-gradient(rgba(0,0,0,0), rgba(0,0,0,0.75)); }
     .ot-media-barbtn { flex:none; background:none; border:0; color:inherit; font:inherit; font-size:15px;
       line-height:1; padding:5px 6px; border-radius:6px; cursor:pointer; }
-    .ot-media-barbtn:hover { background:rgba(255,255,255,0.18); }
+    @media (hover: hover) { .ot-media-barbtn:hover { background:rgba(255,255,255,0.18); } }
     .ot-media-barbtn svg { display:block; }
     .ot-media-timeline { position:relative; flex:1 1 40px; min-width:40px; height:16px; cursor:pointer; touch-action:none; }
     /* The groove; the played/buffered bars and the knob sit on top of it. */
@@ -157,7 +160,7 @@ function ensureStyles(): void {
     .ot-media-knob { position:absolute; top:2px; left:0; width:12px; height:12px; margin-left:-6px;
       border-radius:50%; background:#e2483d; }
     .ot-media-barbtn:focus-visible, .ot-media-timeline:focus-visible, .ot-media-vol:focus-visible,
-    .ot-media-tracksbtn:focus-visible { outline:2px solid #fff; outline-offset:2px; }
+    .ot-media-tracksbtn:focus-visible, .ot-media-bigplay:focus-visible { outline:2px solid #fff; outline-offset:2px; }
     @media (prefers-reduced-motion: reduce) {
       .ot-media-bar, .ot-media-tracksbtn, .ot-media-rate, .ot-media-toast { transition:none; }
     }
@@ -191,7 +194,7 @@ function ensureStyles(): void {
     .ot-media-menu h4 { margin:4px 8px; font-size:11px; text-transform:uppercase; letter-spacing:.4px; color:#9aa; }
     .ot-media-menu button { display:block; width:100%; text-align:left; font:inherit; color:inherit;
       background:none; border:0; border-radius:6px; padding:6px 8px; cursor:pointer; }
-    .ot-media-menu button:hover { background:rgba(255,255,255,0.12); }
+    @media (hover: hover) { .ot-media-menu button:hover { background:rgba(255,255,255,0.12); } }
     .ot-media-menu button.on::before { content:"✓ "; }
     .ot-media-menu button:not(.on) { padding-left:22px; }
     /* Anchored to our own bar instead of a floating button: above it, right-aligned. */
