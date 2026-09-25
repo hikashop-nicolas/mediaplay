@@ -167,10 +167,16 @@ function ensureStyles(): void {
     .ot-media-preview canvas { display:block; width:min(160px, 38vw); height:auto; border-radius:4px; background:#000; }
     .ot-media-preview span { font:600 11px system-ui, sans-serif; color:#fff; font-variant-numeric:tabular-nums; }
     .ot-media-clock { flex:none; font-variant-numeric:tabular-nums; white-space:nowrap; }
-    .ot-media-vol { flex:0 1 80px; width:80px; min-width:0; accent-color:#fff; }
-    /* On a phone the slider would eat most of the timeline, and the volume keys do the job. */
-    @container (max-width: 460px) { .ot-media-vol { display:none; } }
-    .ot-media-menu { position:absolute; top:44px; left:14px; z-index:3; min-width:200px;
+    .ot-media-volwrap { position:relative; flex:none; display:flex; }
+    .ot-media-volpop { position:absolute; bottom:calc(100% + 6px); left:50%; transform:translateX(-50%);
+      z-index:3; padding:10px 6px; background:rgba(24,24,30,0.97);
+      border:1px solid rgba(255,255,255,0.2); border-radius:10px; }
+    .ot-media-volpop[hidden] { display:none; }
+    /* Vertical slider: writing-mode is the modern way, the appearance is the old fallback. */
+    .ot-media-vol { writing-mode:vertical-lr; direction:rtl; -webkit-appearance:slider-vertical;
+      width:20px; height:96px; accent-color:#fff; }
+    .ot-media-ratebtn { font:600 12px system-ui, sans-serif; font-variant-numeric:tabular-nums; }
+    .ot-media-menu { position:absolute; top:44px; left:14px; z-index:3; min-width:120px; max-width:260px;
       background:rgba(24,24,30,0.97); color:#eee; font:13px system-ui, sans-serif;
       border:1px solid rgba(255,255,255,0.2); border-radius:10px; padding:6px; }
     .ot-media-menu h4 { margin:4px 8px; font-size:11px; text-transform:uppercase; letter-spacing:.4px; color:#9aa; }
@@ -192,6 +198,7 @@ const ICONS = {
   pause: SVG('<path d="M6 5h4v14H6zm8 0h4v14h-4z"/>'),
   volume: SVG('<path d="M4 9v6h3.5L12 19V5L7.5 9H4z"/><path d="M15 8.8a4 4 0 0 1 0 6.4M17.4 6a7 7 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>'),
   muted: SVG('<path d="M4 9v6h3.5L12 19V5L7.5 9H4z"/><path d="m15.5 9.5 5 5m0-5-5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>'),
+  audio: SVG('<path d="M4 10h2v4H4zm3.5-3h2v10h-2zM11 4h2v16h-2zm3.5 4h2v8h-2zM18 10h2v4h-2z"/>'),
   fullscreen: SVG('<path d="M4 9V4h5v2H6v3H4zm11-5h5v5h-2V6h-3V4zM4 15h2v3h3v2H4v-5zm14 0h2v5h-5v-2h3v-3z"/>'),
 };
 
@@ -357,7 +364,14 @@ class MediaPlayer implements MediaPlayerHandle {
       // Our control bar, built after the tracks section below (it hosts no track UI yet);
       // the idle-hide and the click handlers there need to know whether it exists.
       let bar: HTMLElement | null = null;
-      let trackMenu: HTMLElement | null = null; // the tracks menu, when it hangs off our bar
+      // Every popup in the bar registers here: opening one closes the others.
+      const popClosers: (() => void)[] = [];
+      const closeAllPops = () => {
+        for (const c of popClosers) c();
+      };
+      const stage = document.createElement("div");
+      stage.className = "ot-media-stage";
+      stage.appendChild(m);
       const togglePlay = () => {
         if (m.paused) void m.play();
         else m.pause();
@@ -514,12 +528,17 @@ class MediaPlayer implements MediaPlayerHandle {
         timeline.append(buffered, played, knob);
         const clock = document.createElement("span");
         clock.className = "ot-media-clock";
+        // Volume: just the icon in the bar, with the slider in a popup above it, so the
+        // timeline keeps the width a phone needs. Mouse: hover opens it, click mutes.
+        // Touch: the tap opens it, since there is no hover to open it with.
+        const volWrap = document.createElement("div");
+        volWrap.className = "ot-media-volwrap";
         const muteBtn = document.createElement("button");
         muteBtn.type = "button";
         muteBtn.className = "ot-media-barbtn";
-        muteBtn.addEventListener("click", () => {
-          m.muted = !m.muted;
-        });
+        const volPop = document.createElement("div");
+        volPop.className = "ot-media-volpop";
+        volPop.hidden = true;
         const vol = document.createElement("input");
         vol.type = "range";
         vol.className = "ot-media-vol";
@@ -531,7 +550,34 @@ class MediaPlayer implements MediaPlayerHandle {
           m.volume = Number(vol.value);
           m.muted = Number(vol.value) === 0;
         });
-        el.append(playBtn, timeline, clock, muteBtn, vol, ...extras);
+        volPop.appendChild(vol);
+        volWrap.append(muteBtn, volPop);
+        let volTouch = false;
+        popClosers.push(() => (volPop.hidden = true));
+        const closeVolOutside = (e: MouseEvent) => {
+          if (!volWrap.contains(e.target as Node)) volPop.hidden = true;
+        };
+        document.addEventListener("click", closeVolOutside);
+        this.teardown.push(() => document.removeEventListener("click", closeVolOutside));
+        muteBtn.addEventListener("pointerdown", (e) => (volTouch = e.pointerType !== "mouse"));
+        muteBtn.addEventListener("pointerenter", (e) => {
+          if (e.pointerType !== "mouse") return;
+          closeAllPops();
+          volPop.hidden = false;
+        });
+        volWrap.addEventListener("pointerleave", (e) => {
+          if ((e as PointerEvent).pointerType === "mouse") volPop.hidden = true;
+        });
+        muteBtn.addEventListener("click", () => {
+          if (!volTouch) {
+            m.muted = !m.muted;
+            return;
+          }
+          const open = volPop.hidden;
+          closeAllPops();
+          volPop.hidden = !open;
+        });
+        el.append(playBtn, timeline, clock, volWrap, ...extras);
 
         const pct = (t: number) => (Number.isFinite(m.duration) && m.duration > 0 ? Math.min(100, (t / m.duration) * 100) : 0);
         const render = () => {
@@ -766,22 +812,47 @@ class MediaPlayer implements MediaPlayerHandle {
         btn.textContent = "CC ▾";
         btn.title = S.tracksMenu;
         btn.setAttribute("aria-label", S.tracksMenu);
-        btn.setAttribute("aria-haspopup", "true");
-        btn.setAttribute("aria-expanded", "false");
-        const menu = document.createElement("div");
-        menu.className = "ot-media-menu";
-        menu.setAttribute("role", "menu");
-        menu.hidden = true;
-        // aria-expanded must follow every path that closes the menu, not just the button.
-        const menuObserver = new MutationObserver(() => btn.setAttribute("aria-expanded", String(!menu.hidden)));
-        menuObserver.observe(menu, { attributes: true, attributeFilter: ["hidden"] });
-        this.teardown.push(() => menuObserver.disconnect());
-        btn.addEventListener("click", () => {
-          menu.hidden = !menu.hidden;
-          if (!menu.hidden) rebuildMenu();
-        });
+        // One popup per button: subtitles, audio and speed each get their own, instead of
+        // one menu piling up three unrelated lists. The native bar keeps a combined one.
+        type MenuKind = "subs" | "audio" | "speed";
+        const pops: { el: HTMLElement; btn: HTMLElement; kinds: MenuKind[] }[] = [];
+        let audioBtn: HTMLButtonElement | null = null;
+        const closePops = closeAllPops;
+        const placePop = (el: HTMLElement, anchor: HTMLElement) => {
+          if (!bar) return; // the floating menu keeps its CSS position
+          const s = stage.getBoundingClientRect();
+          const b = anchor.getBoundingClientRect();
+          el.style.bottom = `${Math.round(s.bottom - bar.getBoundingClientRect().top + 8)}px`;
+          const w = el.offsetWidth;
+          el.style.left = `${Math.round(Math.min(s.width - w - 8, Math.max(8, b.left + b.width / 2 - s.left - w / 2)))}px`;
+        };
+        const makePop = (anchor: HTMLButtonElement, kinds: MenuKind[]): HTMLElement => {
+          const el = document.createElement("div");
+          el.className = "ot-media-menu";
+          el.setAttribute("role", "menu");
+          el.hidden = true;
+          // aria-expanded must follow every path that closes the menu, not just the button.
+          const obs = new MutationObserver(() => anchor.setAttribute("aria-expanded", String(!el.hidden)));
+          obs.observe(el, { attributes: true, attributeFilter: ["hidden"] });
+          this.teardown.push(() => obs.disconnect());
+          anchor.setAttribute("aria-haspopup", "true");
+          anchor.setAttribute("aria-expanded", "false");
+          anchor.addEventListener("click", () => {
+            const open = el.hidden;
+            closePops();
+            if (!open) return;
+            fillMenu(el, kinds);
+            el.hidden = false;
+            placePop(el, anchor);
+          });
+          pops.push({ el, btn: anchor, kinds });
+          popClosers.push(() => (el.hidden = true));
+          fillMenu(el, kinds);
+          return el;
+        };
         const closeMenu = (e: MouseEvent) => {
-          if (!menu.hidden && !menu.contains(e.target as Node) && e.target !== btn) menu.hidden = true;
+          const t = e.target as Node;
+          for (const p of pops) if (!p.el.hidden && !p.el.contains(t) && !p.btn.contains(t)) p.el.hidden = true;
         };
         document.addEventListener("click", closeMenu);
         this.teardown.push(() => document.removeEventListener("click", closeMenu));
@@ -794,7 +865,7 @@ class MediaPlayer implements MediaPlayerHandle {
           window.clearTimeout(idleTimer);
           if (document.fullscreenElement === wrap)
             idleTimer = window.setTimeout(() => {
-              if (menu.hidden) wrap.classList.add("ot-media-idle");
+              if (pops.every((p) => p.el.hidden)) wrap.classList.add("ot-media-idle");
             }, 2500);
         };
         wrap.addEventListener("pointermove", poke);
@@ -865,7 +936,7 @@ class MediaPlayer implements MediaPlayerHandle {
         fileInput.addEventListener("change", async () => {
           const f = fileInput.files?.[0];
           fileInput.value = "";
-          menu.hidden = true;
+          closePops();
           if (!f) return;
           try {
             const raw = new Uint8Array(await f.arrayBuffer());
@@ -965,7 +1036,7 @@ class MediaPlayer implements MediaPlayerHandle {
         };
 
         const switchAudio = async (i: number) => {
-          menu.hidden = true;
+          closePops();
           if (i === activeAudio) return;
           // Decoded-audio mode: every track is browser-undecodable, so restart the libav
           // decoder on the newly chosen track rather than remuxing.
@@ -1004,12 +1075,14 @@ class MediaPlayer implements MediaPlayerHandle {
           rebuildMenu();
         };
 
-        const rebuildMenu = () => {
-          menu.textContent = "";
+        /** Fill one popup with the lists it owns. */
+        const fillMenu = (host: HTMLElement, kinds: MenuKind[]) => {
+          host.textContent = "";
           const section = (label: string) => {
+            if (kinds.length < 2) return; // a single-list popup needs no heading
             const h = document.createElement("h4");
             h.textContent = label;
-            menu.appendChild(h);
+            host.appendChild(h);
           };
           const item = (label: string, on: boolean, fn: () => void, action = false) => {
             const b = document.createElement("button");
@@ -1019,35 +1092,39 @@ class MediaPlayer implements MediaPlayerHandle {
             b.textContent = label;
             if (on) b.classList.add("on");
             b.addEventListener("click", fn);
-            menu.appendChild(b);
+            host.appendChild(b);
           };
-          section(S.subtitles);
-          item(S.subtitlesOff, activeSub < 0, () => {
-            setSub(-1);
-            menu.hidden = true;
-          });
-          subTracks.forEach((entry, i) =>
-            item(entry.label || `#${i + 1}`, activeSub === i, () => {
-              setSub(i);
-              menu.hidden = true;
-            }),
-          );
-          item(S.loadSubtitles, false, () => fileInput.click(), true);
-          if (audioTracks.length > 1) {
+          if (kinds.includes("subs")) {
+            section(S.subtitles);
+            item(S.subtitlesOff, activeSub < 0, () => {
+              setSub(-1);
+              closePops();
+            });
+            subTracks.forEach((entry, i) =>
+              item(entry.label || `#${i + 1}`, activeSub === i, () => {
+                setSub(i);
+                closePops();
+              }),
+            );
+            item(S.loadSubtitles, false, () => fileInput.click(), true);
+          }
+          if (kinds.includes("audio") && audioTracks.length > 1) {
             section(S.audioTracks);
             audioTracks.forEach((a, i) => item(a.label || a.language || `#${i + 1}`, activeAudio === i, () => void switchAudio(i)));
           }
-          if (bar) {
-            // Speed lives here only when we own the bar; the native one has its own menu.
+          if (kinds.includes("speed")) {
             section(S.speed);
             for (const r of [0.5, 0.75, 1, 1.25, 1.5, 2])
               item(`${r}\u00d7`, Math.abs(m.playbackRate - r) < 0.01, () => {
                 setRate(r, false);
-                menu.hidden = true;
+                closePops();
               });
           }
         };
-        rebuildMenu();
+        const rebuildMenu = () => {
+          for (const p of pops) fillMenu(p.el, p.kinds);
+          if (audioBtn) audioBtn.hidden = audioTracks.length < 2; // only worth a button with a choice
+        };
 
         window.setTimeout(async () => {
           if (!this.wrap) return;
@@ -1095,29 +1172,45 @@ class MediaPlayer implements MediaPlayerHandle {
         if (ownBar) {
           btn.className = "ot-media-barbtn";
           btn.textContent = "CC";
+          btn.title = S.subtitles;
+          btn.setAttribute("aria-label", S.subtitles);
           fsBtn.className = "ot-media-barbtn";
-          menu.classList.add("ot-media-menu-up"); // it hangs above the bar, not below a floating button
-          const extras: HTMLElement[] = [];
-          if (showCC) extras.push(btn);
+          // The speed button wears the current rate, which is also what it is for.
+          const speedBtn = document.createElement("button");
+          speedBtn.type = "button";
+          speedBtn.className = "ot-media-barbtn ot-media-ratebtn";
+          speedBtn.title = S.speed;
+          speedBtn.setAttribute("aria-label", S.speed);
+          const showRate = () => (speedBtn.textContent = `${Math.round(m.playbackRate * 100) / 100}\u00d7`);
+          m.addEventListener("ratechange", showRate);
+          showRate();
+          audioBtn = document.createElement("button");
+          audioBtn.type = "button";
+          audioBtn.className = "ot-media-barbtn";
+          audioBtn.innerHTML = ICONS.audio;
+          audioBtn.title = S.audioTracks;
+          audioBtn.setAttribute("aria-label", S.audioTracks);
+          audioBtn.hidden = true; // shown once the file turns out to have several tracks
+          const extras: HTMLElement[] = [speedBtn];
+          if (showCC) extras.push(audioBtn, btn);
           if (ownFs) extras.push(fsBtn);
           bar = buildBar(extras);
-          if (showCC) trackMenu = menu; // appended to the stage below, so it sits over the picture
+          stage.append(makePop(speedBtn, ["speed"]));
+          if (showCC) stage.append(makePop(audioBtn, ["audio"]), makePop(btn, ["subs"]));
+          for (const p of pops) p.el.classList.add("ot-media-menu-up"); // they hang above the bar
         } else {
           fsBtn.className = "ot-media-tracksbtn ot-media-fsbtn";
           if (this.opts.embedded) fsBtn.style.left = "14px";
           if (showCC) {
             wrap.appendChild(btn);
-            wrap.appendChild(menu);
+            wrap.appendChild(makePop(btn, ["subs", "audio"])); // one floating menu, as before
           }
           if (ownFs) wrap.appendChild(fsBtn); // iPhone keeps the native one: no element fullscreen there
         }
+        rebuildMenu();
         wrap.appendChild(fileInput);
       }
-      const stage = document.createElement("div");
-      stage.className = "ot-media-stage";
-      stage.appendChild(m);
       if (bar) stage.appendChild(bar);
-      if (trackMenu) stage.appendChild(trackMenu);
       wrap.appendChild(stage);
       wrap.appendChild(rateBadge);
     } else {
