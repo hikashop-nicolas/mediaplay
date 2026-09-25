@@ -161,6 +161,14 @@ function ensureStyles(): void {
     @media (prefers-reduced-motion: reduce) {
       .ot-media-bar, .ot-media-tracksbtn, .ot-media-rate, .ot-media-toast { transition:none; }
     }
+    /* Fullscreen: a play/pause target in the middle of the screen, where a thumb is,
+       rather than only the small one in the corner of the bar. */
+    .ot-media-bigplay { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+      z-index:2; display:none; align-items:center; justify-content:center; width:76px; height:76px;
+      padding:0; border:0; border-radius:50%; color:#fff; cursor:pointer;
+      background:rgba(20,20,24,0.55); transition:opacity .25s; }
+    .ot-media-bigplay svg { width:38px; height:38px; }
+    .ot-media:fullscreen:not(.ot-media-idle) .ot-media-bigplay { display:flex; }
     .ot-media-preview[hidden] { display:none; }
     .ot-media-preview { position:absolute; bottom:22px; transform:translateX(-50%); pointer-events:none;
       display:flex; flex-direction:column; align-items:center; gap:3px; padding:4px;
@@ -177,7 +185,7 @@ function ensureStyles(): void {
     .ot-media-vol { writing-mode:vertical-lr; direction:rtl; -webkit-appearance:slider-vertical;
       width:20px; height:96px; accent-color:#fff; }
     .ot-media-ratebtn { font:600 12px system-ui, sans-serif; font-variant-numeric:tabular-nums; }
-    .ot-media-menu { position:absolute; top:44px; left:14px; z-index:3; min-width:120px; max-width:260px;
+    .ot-media-menu { position:absolute; top:44px; left:14px; z-index:3; width:max-content; max-width:min(280px, 80vw);
       background:rgba(24,24,30,0.97); color:#eee; font:13px system-ui, sans-serif;
       border:1px solid rgba(255,255,255,0.2); border-radius:10px; padding:6px; }
     .ot-media-menu h4 { margin:4px 8px; font-size:11px; text-transform:uppercase; letter-spacing:.4px; color:#9aa; }
@@ -365,6 +373,7 @@ class MediaPlayer implements MediaPlayerHandle {
       // Our control bar, built after the tracks section below (it hosts no track UI yet);
       // the idle-hide and the click handlers there need to know whether it exists.
       let bar: HTMLElement | null = null;
+      let bigPlay: HTMLElement | null = null; // centre play/pause, fullscreen only
       // Every popup in the bar registers here: opening one closes the others.
       const popClosers: (() => void)[] = [];
       const closeAllPops = () => {
@@ -514,6 +523,11 @@ class MediaPlayer implements MediaPlayerHandle {
         playBtn.type = "button";
         playBtn.className = "ot-media-barbtn";
         playBtn.addEventListener("click", togglePlay);
+        const bigBtn = document.createElement("button");
+        bigBtn.type = "button";
+        bigBtn.className = "ot-media-bigplay";
+        bigBtn.addEventListener("click", togglePlay);
+        bigPlay = bigBtn;
         const timeline = document.createElement("div");
         timeline.className = "ot-media-timeline";
         timeline.tabIndex = 0;
@@ -598,6 +612,9 @@ class MediaPlayer implements MediaPlayerHandle {
           playBtn.title = m.paused ? S.play : S.pause;
           playBtn.setAttribute("aria-label", playBtn.title);
           playBtn.setAttribute("aria-pressed", String(!m.paused));
+          bigBtn.innerHTML = playBtn.innerHTML;
+          bigBtn.title = playBtn.title;
+          bigBtn.setAttribute("aria-label", playBtn.title);
           muteBtn.innerHTML = m.muted || !m.volume ? ICONS.muted : ICONS.volume;
           muteBtn.title = m.muted ? S.unmute : S.mute;
           muteBtn.setAttribute("aria-label", muteBtn.title);
@@ -1245,6 +1262,7 @@ class MediaPlayer implements MediaPlayerHandle {
         wrap.appendChild(fileInput);
       }
       if (bar) stage.appendChild(bar);
+      if (bigPlay) stage.appendChild(bigPlay);
       wrap.appendChild(stage);
       wrap.appendChild(rateBadge);
     } else {
