@@ -101,7 +101,10 @@ function ensureStyles(): void {
   s.textContent = `
     .ot-media { height:100%; overflow:auto; background:#000; position:relative;
       display:flex; align-items:center; justify-content:center; outline:none; }
-    .ot-media-stage { position:relative; display:flex; max-width:100%; max-height:100%; }
+    /* Column: the bar sits under the picture, where it needs no tap to appear. In
+       fullscreen it goes back to floating over the video, like every player does. */
+    .ot-media-stage { position:relative; display:flex; flex-direction:column; max-width:100%; max-height:100%; }
+    .ot-media-stage video { min-height:0; }
     .ot-media video { max-width:100%; max-height:100%; }
     /* F fullscreens the whole player (wrap), so the libass canvas and the overlays
        ride along; the video then fills the screen with letterboxing. */
@@ -132,11 +135,12 @@ function ensureStyles(): void {
     /* Fullscreen with an idle mouse: hide our chrome like the native controls do. */
     .ot-media.ot-media-idle { cursor:none; }
     .ot-media.ot-media-idle .ot-media-tracksbtn { opacity:0; pointer-events:none; }
-    .ot-media.ot-media-idle .ot-media-bar { opacity:0; pointer-events:none; }
-    .ot-media-bar { container-type:inline-size; position:absolute; left:0; right:0; bottom:0; z-index:2; box-sizing:border-box;
-      display:flex; align-items:center; gap:10px; padding:14px 12px 8px; color:#fff;
-      font:12px system-ui, sans-serif; transition:opacity .25s;
-      background:linear-gradient(rgba(0,0,0,0), rgba(0,0,0,0.75)); }
+    .ot-media:fullscreen.ot-media-idle .ot-media-bar { opacity:0; pointer-events:none; }
+    .ot-media-bar { container-type:inline-size; z-index:2; box-sizing:border-box; width:100%;
+      display:flex; align-items:center; gap:10px; padding:8px 12px; color:#fff;
+      font:12px system-ui, sans-serif; transition:opacity .25s; background:#16161c; }
+    .ot-media:fullscreen .ot-media-bar { position:absolute; left:0; right:0; bottom:0;
+      padding:14px 12px 8px; background:linear-gradient(rgba(0,0,0,0), rgba(0,0,0,0.75)); }
     .ot-media-barbtn { flex:none; background:none; border:0; color:inherit; font:inherit; font-size:15px;
       line-height:1; padding:5px 6px; border-radius:6px; cursor:pointer; }
     .ot-media-barbtn:hover { background:rgba(255,255,255,0.18); }
@@ -776,14 +780,12 @@ class MediaPlayer implements MediaPlayerHandle {
         const poke = () => {
           wrap.classList.remove("ot-media-idle");
           window.clearTimeout(idleTimer);
-          if (document.fullscreenElement === wrap || (bar && !m.paused))
+          if (document.fullscreenElement === wrap)
             idleTimer = window.setTimeout(() => {
               if (menu.hidden) wrap.classList.add("ot-media-idle");
             }, 2500);
         };
         wrap.addEventListener("pointermove", poke);
-        m.addEventListener("play", poke);
-        m.addEventListener("pause", poke);
 
         // Double-click toggles fullscreen (like F); without this, Chrome's native
         // handler fullscreens the bare video where none of our overlays can live.
@@ -802,7 +804,7 @@ class MediaPlayer implements MediaPlayerHandle {
         m.addEventListener("click", () => {
           if (!bar) return;
           window.clearTimeout(clickTimer);
-          if (touched) {
+          if (touched && document.fullscreenElement) {
             if (wrap.classList.contains("ot-media-idle")) poke();
             else wrap.classList.add("ot-media-idle");
             return;
