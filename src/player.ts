@@ -138,6 +138,7 @@ function ensureStyles(): void {
     .ot-media.ot-media-idle .ot-media-tracksbtn { opacity:0; pointer-events:none; }
     .ot-media:fullscreen.ot-media-idle .ot-media-bar { opacity:0; pointer-events:none; }
     .ot-media-bar { container-type:inline-size; z-index:2; box-sizing:border-box; width:100%;
+      user-select:none; -webkit-user-select:none; -webkit-tap-highlight-color:transparent;
       display:flex; align-items:center; gap:10px; padding:8px 12px; color:#fff;
       font:12px system-ui, sans-serif; transition:opacity .25s; background:#16161c; }
     .ot-media:fullscreen .ot-media-bar { position:absolute; left:0; right:0; bottom:0;
@@ -580,11 +581,12 @@ class MediaPlayer implements MediaPlayerHandle {
         el.append(playBtn, timeline, clock, volWrap, ...extras);
 
         const pct = (t: number) => (Number.isFinite(m.duration) && m.duration > 0 ? Math.min(100, (t / m.duration) * 100) : 0);
+        let scrubAt = -1; // >= 0 while a drag is in progress: the time it is pointing at
         const render = () => {
-          const p = pct(m.currentTime);
+          const p = pct(scrubAt >= 0 ? scrubAt : m.currentTime);
           played.style.width = `${p}%`;
           knob.style.left = `${p}%`;
-          clock.textContent = `${fmtClock(m.currentTime)} / ${Number.isFinite(m.duration) ? fmtClock(m.duration) : "--:--"}`;
+          clock.textContent = `${fmtClock(scrubAt >= 0 ? scrubAt : m.currentTime)} / ${Number.isFinite(m.duration) ? fmtClock(m.duration) : "--:--"}`;
           timeline.setAttribute("aria-valuetext", clock.textContent);
           timeline.setAttribute("aria-valuenow", String(Math.floor(m.currentTime)));
           timeline.setAttribute("aria-valuemax", String(Number.isFinite(m.duration) ? Math.floor(m.duration) : 0));
@@ -709,21 +711,33 @@ class MediaPlayer implements MediaPlayerHandle {
             });
         }
 
-        // Scrubbing: pointer capture so a drag keeps seeking outside the bar's box.
-        const seekTo = (clientX: number) => {
+        // Scrubbing: pointer capture so a drag keeps working outside the bar's box. The
+        // drag only moves the handle and the preview; the video is seeked when the finger
+        // lifts, so the picture does not jump about while the preview already shows it.
+        const aimAt = (clientX: number) => {
           const t = timeAt(clientX);
           if (t === null) return;
-          m.currentTime = t;
+          scrubAt = t;
           render();
         };
         timeline.addEventListener("pointerdown", (e) => {
           timeline.setPointerCapture(e.pointerId);
-          seekTo(e.clientX);
+          e.preventDefault(); // no text selection, and no drag of the bar itself
+          closeAllPops(); // preventDefault also swallows the click that would close them
+          aimAt(e.clientX);
         });
         timeline.addEventListener("pointermove", (e) => {
-          if (timeline.hasPointerCapture(e.pointerId)) seekTo(e.clientX);
+          if (timeline.hasPointerCapture(e.pointerId)) aimAt(e.clientX);
         });
-        timeline.addEventListener("pointerup", (e) => timeline.releasePointerCapture(e.pointerId));
+        const endScrub = (e: PointerEvent) => {
+          if (!timeline.hasPointerCapture(e.pointerId)) return;
+          timeline.releasePointerCapture(e.pointerId);
+          if (scrubAt >= 0) m.currentTime = scrubAt;
+          scrubAt = -1;
+          render();
+        };
+        timeline.addEventListener("pointerup", endScrub);
+        timeline.addEventListener("pointercancel", endScrub);
         this.teardown.push(stopLoop);
         return el;
       };
