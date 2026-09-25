@@ -53,6 +53,10 @@ class SyncedAudio {
   // autoplay), so video.muted can't be honored yet; after the gesture unmutes it, the
   // element's muted/volume drive the gain natively (M key, arrows, the controls' slider).
   private muteSynced = false;
+  // Media time of the frame actually on screen, and when that was reported.
+  private presented = -1;
+  private presentedAt = 0;
+  private frameHandle = 0;
 
   constructor(
     private readonly video: HTMLMediaElement,
@@ -89,6 +93,7 @@ class SyncedAudio {
     // A seek invalidates everything queued; drop it and re-decode from the new point.
     on("seeking", () => {
       this.stopActive();
+      this.presented = -1; // the frame we remembered is from the old position
       this.token++;
     });
     on("seeked", () => this.restart());
@@ -123,6 +128,34 @@ class SyncedAudio {
     const removeGesture = () => gestures.forEach((ev) => document.removeEventListener(ev, tryResume));
     gestures.forEach((ev) => document.addEventListener(ev, tryResume, { passive: true }));
     this.cleanups.push(removeGesture);
+    this.trackFrames();
+  }
+
+  /** Follow the frames the browser actually presents. currentTime runs ahead of the picture
+   * when video decoding falls behind (a big file, a busy machine), and audio tied to it then
+   * plays early: the lag people describe as "the video is behind the sound". */
+  private trackFrames(): void {
+    const v = this.video as HTMLVideoElement & {
+      requestVideoFrameCallback?: (cb: (now: number, meta: { mediaTime: number }) => void) => number;
+      cancelVideoFrameCallback?: (handle: number) => void;
+    };
+    if (typeof v.requestVideoFrameCallback !== "function") return; // Firefox: element clock it is
+    const step = (_now: number, meta: { mediaTime: number }) => {
+      this.presented = meta.mediaTime;
+      this.presentedAt = performance.now();
+      this.frameHandle = v.requestVideoFrameCallback!(step);
+    };
+    this.frameHandle = v.requestVideoFrameCallback(step);
+    this.cleanups.push(() => v.cancelVideoFrameCallback?.(this.frameHandle));
+  }
+
+  /** The video clock the audio follows: the presented frame where we have one, the element's
+   * own clock otherwise (no callback support, a paused video, a hidden tab). */
+  private videoNow(): number {
+    if (this.presented < 0) return this.video.currentTime;
+    const age = (performance.now() - this.presentedAt) / 1000;
+    if (age > 0.5) return this.video.currentTime; // no frames lately: the clock is all we have
+    return this.presented + (this.video.paused ? 0 : age * (this.video.playbackRate || 1));
   }
 
   /** Decoded-audio gain follows the video element's volume (and, once the autoplay
@@ -166,7 +199,7 @@ class SyncedAudio {
       }
     }
     if (myToken !== this.token || this.disposed) return; // superseded while closing
-    const iter = this.source.buffers(this.video.currentTime, this.ctx);
+    const iter = this.source.buffers(this.videoNow(), this.ctx);
     this.currentIter = iter;
     await this.run(myToken, iter);
   }
@@ -205,21 +238,22 @@ class SyncedAudio {
         // Cold start: the first decoded buffer can arrive late, by which point the video
         // has run ahead. Re-seek the now-warm decoder to the live position rather than
         // decode-and-skip hundreds of stale buffers. Guarded + capped so it can't loop.
-        if (!anchored && this.reseeks < 3 && !this.video.paused && this.video.currentTime - timestamp > 2) {
+        if (!anchored && this.reseeks < 3 && !this.video.paused && this.videoNow() - timestamp > 2) {
           this.reseeks++;
           this.restart();
           return;
         }
         // Drop buffers before the live position (from a coarse seek) until we anchor.
-        if (!anchored && timestamp < this.video.currentTime - 0.1) continue;
+        if (!anchored && timestamp < this.videoNow() - 0.1) continue;
 
         const rate = this.video.playbackRate || 1;
         if (!anchored) {
-          // Anchor: the live video position plays now (+ a small lead), so audio stays in
-          // sync. From here buffers are laid down back-to-back from the nextWhen cursor -
-          // sample-accurate, so there is no gap or overlap (and no click) between them.
-          anchorCtx = this.ctx.currentTime + LEAD_IN;
-          anchorMedia = this.video.currentTime;
+          // Anchor on the buffer's OWN media time, not on the live video position: the two
+          // differ by however far the decoder started before the video is now, and taking
+          // the video's time here turned that difference into a permanent A/V offset. If
+          // this audio is still ahead of the picture, it waits for the video to reach it.
+          anchorMedia = timestamp;
+          anchorCtx = this.ctx.currentTime + LEAD_IN + Math.max(0, timestamp - this.videoNow());
           nextWhen = anchorCtx;
           anchored = true;
         }
@@ -234,7 +268,7 @@ class SyncedAudio {
         // differently over time); momentary video stutters are tolerated so audio is smooth.
         if (!this.video.paused && this.ctx.state === "running") {
           const audioMediaNow = anchorMedia + (this.ctx.currentTime - anchorCtx) * rate;
-          if (Math.abs(audioMediaNow - this.video.currentTime) > DRIFT_MAX) {
+          if (Math.abs(audioMediaNow - this.videoNow()) > DRIFT_MAX) {
             this.restart();
             return;
           }
