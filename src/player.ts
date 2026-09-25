@@ -133,7 +133,7 @@ function ensureStyles(): void {
     .ot-media.ot-media-idle { cursor:none; }
     .ot-media.ot-media-idle .ot-media-tracksbtn { opacity:0; pointer-events:none; }
     .ot-media.ot-media-idle .ot-media-bar { opacity:0; pointer-events:none; }
-    .ot-media-bar { position:absolute; left:0; right:0; bottom:0; z-index:2; box-sizing:border-box;
+    .ot-media-bar { container-type:inline-size; position:absolute; left:0; right:0; bottom:0; z-index:2; box-sizing:border-box;
       display:flex; align-items:center; gap:10px; padding:14px 12px 8px; color:#fff;
       font:12px system-ui, sans-serif; transition:opacity .25s;
       background:linear-gradient(rgba(0,0,0,0), rgba(0,0,0,0.75)); }
@@ -154,6 +154,7 @@ function ensureStyles(): void {
     @media (prefers-reduced-motion: reduce) {
       .ot-media-bar, .ot-media-tracksbtn, .ot-media-rate, .ot-media-toast { transition:none; }
     }
+    .ot-media-preview[hidden] { display:none; }
     .ot-media-preview { position:absolute; bottom:22px; transform:translateX(-50%); pointer-events:none;
       display:flex; flex-direction:column; align-items:center; gap:3px; padding:4px;
       background:rgba(20,20,24,0.92); border:1px solid rgba(255,255,255,0.25); border-radius:8px; }
@@ -161,6 +162,8 @@ function ensureStyles(): void {
     .ot-media-preview span { font:600 11px system-ui, sans-serif; color:#fff; font-variant-numeric:tabular-nums; }
     .ot-media-clock { flex:none; font-variant-numeric:tabular-nums; white-space:nowrap; }
     .ot-media-vol { flex:0 1 80px; width:80px; min-width:0; accent-color:#fff; }
+    /* On a phone the slider would eat most of the timeline, and the volume keys do the job. */
+    @container (max-width: 460px) { .ot-media-vol { display:none; } }
     .ot-media-menu { position:absolute; top:44px; left:14px; z-index:3; min-width:200px;
       background:rgba(24,24,30,0.97); color:#eee; font:13px system-ui, sans-serif;
       border:1px solid rgba(255,255,255,0.2); border-radius:10px; padding:6px; }
