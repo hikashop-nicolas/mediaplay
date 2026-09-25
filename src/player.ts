@@ -149,6 +149,11 @@ function ensureStyles(): void {
     .ot-media-played { background:#e2483d; }
     .ot-media-knob { position:absolute; top:2px; left:0; width:12px; height:12px; margin-left:-6px;
       border-radius:50%; background:#e2483d; }
+    .ot-media-barbtn:focus-visible, .ot-media-timeline:focus-visible, .ot-media-vol:focus-visible,
+    .ot-media-tracksbtn:focus-visible { outline:2px solid #fff; outline-offset:2px; }
+    @media (prefers-reduced-motion: reduce) {
+      .ot-media-bar, .ot-media-tracksbtn, .ot-media-rate, .ot-media-toast { transition:none; }
+    }
     .ot-media-preview { position:absolute; bottom:22px; transform:translateX(-50%); pointer-events:none;
       display:flex; flex-direction:column; align-items:center; gap:3px; padding:4px;
       background:rgba(20,20,24,0.92); border:1px solid rgba(255,255,255,0.25); border-radius:8px; }
@@ -477,8 +482,10 @@ class MediaPlayer implements MediaPlayerHandle {
         playBtn.addEventListener("click", togglePlay);
         const timeline = document.createElement("div");
         timeline.className = "ot-media-timeline";
+        timeline.tabIndex = 0;
         timeline.setAttribute("role", "slider");
         timeline.setAttribute("aria-label", S.timeline);
+        timeline.setAttribute("aria-valuemin", "0");
         const buffered = document.createElement("div");
         buffered.className = "ot-media-buffered";
         const played = document.createElement("div");
@@ -514,14 +521,20 @@ class MediaPlayer implements MediaPlayerHandle {
           knob.style.left = `${p}%`;
           clock.textContent = `${fmtClock(m.currentTime)} / ${Number.isFinite(m.duration) ? fmtClock(m.duration) : "--:--"}`;
           timeline.setAttribute("aria-valuetext", clock.textContent);
+          timeline.setAttribute("aria-valuenow", String(Math.floor(m.currentTime)));
+          timeline.setAttribute("aria-valuemax", String(Number.isFinite(m.duration) ? Math.floor(m.duration) : 0));
           const end = m.buffered.length ? m.buffered.end(m.buffered.length - 1) : 0;
           buffered.style.width = `${pct(end)}%`;
         };
         const renderState = () => {
           playBtn.textContent = m.paused ? "▶" : "❚❚";
           playBtn.title = m.paused ? S.play : S.pause;
+          playBtn.setAttribute("aria-label", playBtn.title);
+          playBtn.setAttribute("aria-pressed", String(!m.paused));
           muteBtn.textContent = m.muted || !m.volume ? "🔇" : "🔊";
           muteBtn.title = m.muted ? S.unmute : S.mute;
+          muteBtn.setAttribute("aria-label", muteBtn.title);
+          muteBtn.setAttribute("aria-pressed", String(m.muted));
           vol.value = String(m.muted ? 0 : m.volume);
         };
         // rAF only while playing, for a timeline that moves smoothly (timeupdate fires ~4/s).
@@ -555,6 +568,7 @@ class MediaPlayer implements MediaPlayerHandle {
         const preview = document.createElement("div");
         preview.className = "ot-media-preview";
         preview.hidden = true;
+        preview.setAttribute("aria-hidden", "true");
         const shot = document.createElement("canvas");
         const shotCtx = shot.getContext("2d");
         const stamp = document.createElement("span");
@@ -725,9 +739,17 @@ class MediaPlayer implements MediaPlayerHandle {
         btn.className = "ot-media-tracksbtn";
         btn.textContent = "CC ▾";
         btn.title = S.tracksMenu;
+        btn.setAttribute("aria-label", S.tracksMenu);
+        btn.setAttribute("aria-haspopup", "true");
+        btn.setAttribute("aria-expanded", "false");
         const menu = document.createElement("div");
         menu.className = "ot-media-menu";
+        menu.setAttribute("role", "menu");
         menu.hidden = true;
+        // aria-expanded must follow every path that closes the menu, not just the button.
+        const menuObserver = new MutationObserver(() => btn.setAttribute("aria-expanded", String(!menu.hidden)));
+        menuObserver.observe(menu, { attributes: true, attributeFilter: ["hidden"] });
+        this.teardown.push(() => menuObserver.disconnect());
         btn.addEventListener("click", () => {
           menu.hidden = !menu.hidden;
           if (!menu.hidden) rebuildMenu();
@@ -951,9 +973,11 @@ class MediaPlayer implements MediaPlayerHandle {
             h.textContent = label;
             menu.appendChild(h);
           };
-          const item = (label: string, on: boolean, fn: () => void) => {
+          const item = (label: string, on: boolean, fn: () => void, action = false) => {
             const b = document.createElement("button");
             b.type = "button";
+            b.setAttribute("role", action ? "menuitem" : "menuitemradio");
+            if (!action) b.setAttribute("aria-checked", String(on));
             b.textContent = label;
             if (on) b.classList.add("on");
             b.addEventListener("click", fn);
@@ -970,7 +994,7 @@ class MediaPlayer implements MediaPlayerHandle {
               menu.hidden = true;
             }),
           );
-          item(S.loadSubtitles, false, () => fileInput.click());
+          item(S.loadSubtitles, false, () => fileInput.click(), true);
           if (audioTracks.length > 1) {
             section(S.audioTracks);
             audioTracks.forEach((a, i) => item(a.label || a.language || `#${i + 1}`, activeAudio === i, () => void switchAudio(i)));
@@ -1026,6 +1050,7 @@ class MediaPlayer implements MediaPlayerHandle {
         fsBtn.type = "button";
         fsBtn.textContent = "⛶";
         fsBtn.title = S.fullscreen;
+        fsBtn.setAttribute("aria-label", S.fullscreen);
         fsBtn.addEventListener("click", toggleFullscreen);
         // In embedded mode the host owns subtitle choice, so hide the CC button/menu.
         const showCC = !this.opts.embedded;
