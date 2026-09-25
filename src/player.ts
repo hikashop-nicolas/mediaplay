@@ -306,6 +306,13 @@ class MediaPlayer implements MediaPlayerHandle {
     const wrap = document.createElement("div");
     wrap.className = "ot-media";
     wrap.tabIndex = 0;
+    // A mouse click leaves focus on the button it pressed, where Space then activates that
+    // button again instead of playing: clicking fullscreen and pressing Space left
+    // fullscreen. A pointer click hands focus back to the player; keyboard activation
+    // (detail 0) keeps it, so Tab and Space still work through the controls.
+    wrap.addEventListener("click", (e) => {
+      if (e.detail > 0 && e.target instanceof HTMLElement && e.target.closest("button")) wrap.focus({ preventScroll: true });
+    });
     if (this.srcBlob) {
       const srcBlob = this.srcBlob;
       this.url = URL.createObjectURL(srcBlob);
