@@ -144,6 +144,7 @@ function ensureStyles(): void {
     .ot-media-barbtn { flex:none; background:none; border:0; color:inherit; font:inherit; font-size:15px;
       line-height:1; padding:5px 6px; border-radius:6px; cursor:pointer; }
     .ot-media-barbtn:hover { background:rgba(255,255,255,0.18); }
+    .ot-media-barbtn svg { display:block; }
     .ot-media-timeline { position:relative; flex:1 1 40px; min-width:40px; height:16px; cursor:pointer; touch-action:none; }
     /* The groove; the played/buffered bars and the knob sit on top of it. */
     .ot-media-timeline::before { content:""; position:absolute; left:0; right:0; top:6px; height:4px;
@@ -182,6 +183,16 @@ function ensureStyles(): void {
   `;
   document.head.appendChild(s);
 }
+
+const SVG = (body: string) => `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false" fill="currentColor">${body}</svg>`;
+/** Bar icons, inline so the library stays a single file with no icon font or asset. */
+const ICONS = {
+  play: SVG('<path d="M8 5v14l11-7z"/>'),
+  pause: SVG('<path d="M6 5h4v14H6zm8 0h4v14h-4z"/>'),
+  volume: SVG('<path d="M4 9v6h3.5L12 19V5L7.5 9H4z"/><path d="M15 8.8a4 4 0 0 1 0 6.4M17.4 6a7 7 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>'),
+  muted: SVG('<path d="M4 9v6h3.5L12 19V5L7.5 9H4z"/><path d="m15.5 9.5 5 5m0-5-5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>'),
+  fullscreen: SVG('<path d="M4 9V4h5v2H6v3H4zm11-5h5v5h-2V6h-3V4zM4 15h2v3h3v2H4v-5zm14 0h2v5h-5v-2h3v-3z"/>'),
+};
 
 const SEEK_STEP = 5; // seconds
 const VOLUME_STEP = 0.05;
@@ -534,11 +545,11 @@ class MediaPlayer implements MediaPlayerHandle {
           buffered.style.width = `${pct(end)}%`;
         };
         const renderState = () => {
-          playBtn.textContent = m.paused ? "▶" : "❚❚";
+          playBtn.innerHTML = m.paused ? ICONS.play : ICONS.pause;
           playBtn.title = m.paused ? S.play : S.pause;
           playBtn.setAttribute("aria-label", playBtn.title);
           playBtn.setAttribute("aria-pressed", String(!m.paused));
-          muteBtn.textContent = m.muted || !m.volume ? "🔇" : "🔊";
+          muteBtn.innerHTML = m.muted || !m.volume ? ICONS.muted : ICONS.volume;
           muteBtn.title = m.muted ? S.unmute : S.mute;
           muteBtn.setAttribute("aria-label", muteBtn.title);
           muteBtn.setAttribute("aria-pressed", String(m.muted));
@@ -1068,7 +1079,7 @@ class MediaPlayer implements MediaPlayerHandle {
         if (ownFs && !ownBar) wrap.classList.add("ot-media-ownfs");
         const fsBtn = document.createElement("button");
         fsBtn.type = "button";
-        fsBtn.textContent = "⛶";
+        fsBtn.innerHTML = ICONS.fullscreen;
         fsBtn.title = S.fullscreen;
         fsBtn.setAttribute("aria-label", S.fullscreen);
         fsBtn.addEventListener("click", toggleFullscreen);
