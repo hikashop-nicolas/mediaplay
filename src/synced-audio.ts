@@ -20,6 +20,9 @@ const DRIFT_MAX = 1.0;
 const sleep = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms));
 
 export interface SyncedAudioHandle {
+  /** True while the video element is muted only so it could autoplay: the sound is coming
+   * from here, so a player's mute button must not show it as muted. */
+  forceMuted(): boolean;
   destroy(): void;
 }
 
@@ -47,16 +50,17 @@ class SyncedAudio {
   private readonly cleanups: (() => void)[] = [];
   private restartTimer = 0;
   private pauseTimer = 0;
+  private resumeTimer = 0;
+  // Anchor mapping media time <-> audio-clock time for the running schedule.
+  private anchorCtx = 0;
+  private anchorMedia = 0;
+  private anchored = false;
   private currentIter: AsyncGenerator<AudioChunk, void, unknown> | null = null;
   private reseeks = 0;
   // Until the first user gesture the video stays force-muted (that's what let it
   // autoplay), so video.muted can't be honored yet; after the gesture unmutes it, the
   // element's muted/volume drive the gain natively (M key, arrows, the controls' slider).
   private muteSynced = false;
-  // Media time of the frame actually on screen, and when that was reported.
-  private presented = -1;
-  private presentedAt = 0;
-  private frameHandle = 0;
 
   constructor(
     private readonly video: HTMLMediaElement,
@@ -79,21 +83,22 @@ class SyncedAudio {
     on("play", () => {
       // A stuttering video (big file) fires rapid pause/play; do NOT restart the pipeline
       // here (that would gap the audio every hitch). Just cancel a pending suspend and
-      // keep playing; the drift check re-aligns if the stutter caused real desync.
+      // keep playing; the check below re-aligns if the pause left a real offset.
       window.clearTimeout(this.pauseTimer);
       void this.ctx.resume();
+      window.clearTimeout(this.resumeTimer);
+      this.resumeTimer = window.setTimeout(() => this.realign(), 200);
     });
     on("pause", () => {
       // Debounce: only suspend on a sustained pause, so momentary stalls don't chop audio.
       window.clearTimeout(this.pauseTimer);
       this.pauseTimer = window.setTimeout(() => {
         if (this.video.paused) void this.ctx.suspend();
-      }, 300);
+      }, 120);
     });
     // A seek invalidates everything queued; drop it and re-decode from the new point.
     on("seeking", () => {
       this.stopActive();
-      this.presented = -1; // the frame we remembered is from the old position
       this.token++;
     });
     on("seeked", () => this.restart());
@@ -128,34 +133,36 @@ class SyncedAudio {
     const removeGesture = () => gestures.forEach((ev) => document.removeEventListener(ev, tryResume));
     gestures.forEach((ev) => document.addEventListener(ev, tryResume, { passive: true }));
     this.cleanups.push(removeGesture);
-    this.trackFrames();
+    // A tab in the background is throttled and its video stops presenting frames; check
+    // the alignment again when it comes back, as after a pause.
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      window.clearTimeout(this.resumeTimer);
+      this.resumeTimer = window.setTimeout(() => this.realign(), 300);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    this.cleanups.push(() => document.removeEventListener("visibilitychange", onVisible));
   }
 
-  /** Follow the frames the browser actually presents. currentTime runs ahead of the picture
-   * when video decoding falls behind (a big file, a busy machine), and audio tied to it then
-   * plays early: the lag people describe as "the video is behind the sound". */
-  private trackFrames(): void {
-    const v = this.video as HTMLVideoElement & {
-      requestVideoFrameCallback?: (cb: (now: number, meta: { mediaTime: number }) => void) => number;
-      cancelVideoFrameCallback?: (handle: number) => void;
-    };
-    if (typeof v.requestVideoFrameCallback !== "function") return; // Firefox: element clock it is
-    const step = (_now: number, meta: { mediaTime: number }) => {
-      this.presented = meta.mediaTime;
-      this.presentedAt = performance.now();
-      this.frameHandle = v.requestVideoFrameCallback!(step);
-    };
-    this.frameHandle = v.requestVideoFrameCallback(step);
-    this.cleanups.push(() => v.cancelVideoFrameCallback?.(this.frameHandle));
+  /** How long after we schedule a sample it actually leaves the speakers. On a phone this
+   * is tens of milliseconds, and ignoring it left the sound that much behind the picture. */
+  private outputLatency(): number {
+    const ctx = this.ctx as AudioContext & { outputLatency?: number };
+    return ctx.outputLatency || ctx.baseLatency || 0;
   }
 
-  /** The video clock the audio follows: the presented frame where we have one, the element's
-   * own clock otherwise (no callback support, a paused video, a hidden tab). */
-  private videoNow(): number {
-    if (this.presented < 0) return this.video.currentTime;
-    const age = (performance.now() - this.presentedAt) / 1000;
-    if (age > 0.5) return this.video.currentTime; // no frames lately: the clock is all we have
-    return this.presented + (this.video.paused ? 0 : age * (this.video.playbackRate || 1));
+  /** The media time being HEARD now (scheduling time minus the output latency). */
+  private audioMediaNow(): number {
+    return this.anchorMedia + (this.ctx.currentTime - this.outputLatency() - this.anchorCtx) * (this.video.playbackRate || 1);
+  }
+
+  /** Re-align after a resume. Audio keeps playing for the few hundred ms the suspend is
+   * debounced, the context takes its own time to stop and start, and a tab left paused in
+   * the background comes back further out still: all of it leaves the audio ahead of the
+   * picture, by less than the drift guard tolerates, and it never came back on its own. */
+  private realign(): void {
+    if (this.disposed || this.video.paused || !this.anchored || this.ctx.state !== "running") return;
+    if (Math.abs(this.audioMediaNow() - this.video.currentTime) > 0.08) this.restart();
   }
 
   /** Decoded-audio gain follows the video element's volume (and, once the autoplay
@@ -199,7 +206,7 @@ class SyncedAudio {
       }
     }
     if (myToken !== this.token || this.disposed) return; // superseded while closing
-    const iter = this.source.buffers(this.videoNow(), this.ctx);
+    const iter = this.source.buffers(this.video.currentTime, this.ctx);
     this.currentIter = iter;
     await this.run(myToken, iter);
   }
@@ -228,34 +235,36 @@ class SyncedAudio {
     // Anchor mapping media-time <-> audio-clock time, fixed for this run so buffers are
     // laid down contiguously (gapless). The video clock is used only to establish the
     // anchor and to detect drift; per-buffer live-clock scheduling made the audio jitter.
-    let anchorCtx = 0;
-    let anchorMedia = 0;
     let nextWhen = 0; // running audio-clock cursor: the next buffer starts exactly here
-    let anchored = false;
+    this.anchored = false;
     try {
       for await (const { buffer, timestamp, duration } of iter) {
         if (token !== this.token || this.disposed) return;
         // Cold start: the first decoded buffer can arrive late, by which point the video
         // has run ahead. Re-seek the now-warm decoder to the live position rather than
         // decode-and-skip hundreds of stale buffers. Guarded + capped so it can't loop.
-        if (!anchored && this.reseeks < 3 && !this.video.paused && this.videoNow() - timestamp > 2) {
+        if (!this.anchored && this.reseeks < 3 && !this.video.paused && this.video.currentTime - timestamp > 2) {
           this.reseeks++;
           this.restart();
           return;
         }
-        // Drop buffers before the live position (from a coarse seek) until we anchor.
-        if (!anchored && timestamp < this.videoNow() - 0.1) continue;
+        // Nothing can be heard sooner than the output latency away, so the buffer to start
+        // with is the one the video will have reached by then; earlier ones are dropped.
+        const lead = LEAD_IN + this.outputLatency();
+        if (!this.anchored && timestamp < this.video.currentTime + lead - 0.02) continue;
 
         const rate = this.video.playbackRate || 1;
-        if (!anchored) {
+        if (!this.anchored) {
           // Anchor on the buffer's OWN media time, not on the live video position: the two
           // differ by however far the decoder started before the video is now, and taking
           // the video's time here turned that difference into a permanent A/V offset. If
           // this audio is still ahead of the picture, it waits for the video to reach it.
-          anchorMedia = timestamp;
-          anchorCtx = this.ctx.currentTime + LEAD_IN + Math.max(0, timestamp - this.videoNow());
-          nextWhen = anchorCtx;
-          anchored = true;
+          this.anchorMedia = timestamp;
+          // Scheduled so it is HEARD when the video reaches its timestamp: the latency
+          // between scheduling and the speakers is taken off, with LEAD_IN as the floor.
+          this.anchorCtx = this.ctx.currentTime + Math.max(LEAD_IN, timestamp - this.video.currentTime - this.outputLatency());
+          nextWhen = this.anchorCtx;
+          this.anchored = true;
         }
 
         // Backpressure: keep at most LOOKAHEAD of audio scheduled ahead of the clock.
@@ -267,8 +276,7 @@ class SyncedAudio {
         // Drift: re-anchor only on a large desync (the two clocks tick slightly
         // differently over time); momentary video stutters are tolerated so audio is smooth.
         if (!this.video.paused && this.ctx.state === "running") {
-          const audioMediaNow = anchorMedia + (this.ctx.currentTime - anchorCtx) * rate;
-          if (Math.abs(audioMediaNow - this.videoNow()) > DRIFT_MAX) {
+          if (Math.abs(this.audioMediaNow() - this.video.currentTime) > DRIFT_MAX) {
             this.restart();
             return;
           }
@@ -297,11 +305,16 @@ class SyncedAudio {
     }
   }
 
+  forceMuted(): boolean {
+    return !this.muteSynced;
+  }
+
   destroy(): void {
     this.disposed = true;
     this.token++;
     window.clearTimeout(this.restartTimer);
     window.clearTimeout(this.pauseTimer);
+    window.clearTimeout(this.resumeTimer);
     void this.currentIter?.return();
     this.currentIter = null;
     this.stopActive();
@@ -475,6 +488,7 @@ export async function playSyncedAudio(
     currentEngine = engine;
     engine.start();
     return {
+      forceMuted: () => engine.forceMuted(),
       destroy: () => {
         engine.destroy();
         if (currentEngine === engine) currentEngine = null;

@@ -283,6 +283,7 @@ class MediaPlayer implements MediaPlayerHandle {
   private subUrls: string[] = [];
   private teardown: (() => void)[] = [];
   private decodedAudio: SyncedAudioHandle | null = null;
+  private refreshControls: (() => void) | null = null;
   private readonly S: MediaStrings;
   private readonly workerUrl: string;
   private readonly fontUrl: string;
@@ -617,6 +618,9 @@ class MediaPlayer implements MediaPlayerHandle {
           const end = m.buffered.length ? m.buffered.end(m.buffered.length - 1) : 0;
           buffered.style.width = `${pct(end)}%`;
         };
+        // The element is muted while the decoded-audio path carries the sound (that mute is
+        // what let it autoplay), so the button must not call that muted.
+        const isMuted = () => m.muted && !this.decodedAudio?.forceMuted();
         const renderState = () => {
           playBtn.innerHTML = m.paused ? ICONS.play : ICONS.pause;
           playBtn.title = m.paused ? S.play : S.pause;
@@ -625,11 +629,11 @@ class MediaPlayer implements MediaPlayerHandle {
           bigBtn.innerHTML = playBtn.innerHTML;
           bigBtn.title = playBtn.title;
           bigBtn.setAttribute("aria-label", playBtn.title);
-          muteBtn.innerHTML = m.muted || !m.volume ? ICONS.muted : ICONS.volume;
-          muteBtn.title = m.muted ? S.unmute : S.mute;
+          muteBtn.innerHTML = isMuted() || !m.volume ? ICONS.muted : ICONS.volume;
+          muteBtn.title = isMuted() ? S.unmute : S.mute;
           muteBtn.setAttribute("aria-label", muteBtn.title);
-          muteBtn.setAttribute("aria-pressed", String(m.muted));
-          vol.value = String(m.muted ? 0 : m.volume);
+          muteBtn.setAttribute("aria-pressed", String(isMuted()));
+          vol.value = String(isMuted() ? 0 : m.volume);
         };
         // rAF only while playing, for a timeline that moves smoothly (timeupdate fires ~4/s).
         let raf = 0;
@@ -657,6 +661,7 @@ class MediaPlayer implements MediaPlayerHandle {
           });
         renderState();
         render();
+        this.refreshControls = renderState; // the decoded-audio path appears later
 
         // Hover preview: the frame under the pointer, decoded from the source bytes.
         const preview = document.createElement("div");
@@ -1304,8 +1309,10 @@ class MediaPlayer implements MediaPlayerHandle {
         if (handle && handle !== "undecodable") handle.destroy();
         return;
       }
-      if (handle && handle !== "undecodable") this.decodedAudio = handle;
-      else showToast(this.S.mediaAudioUnsupported);
+      if (handle && handle !== "undecodable") {
+        this.decodedAudio = handle;
+        this.refreshControls?.(); // it carries the sound now, so the mute icon changes
+      } else showToast(this.S.mediaAudioUnsupported);
     } catch (e) {
       console.warn("[mediaplay:audio] decode path failed:", e);
       if (this.wrap) showToast(this.S.mediaAudioUnsupported);
@@ -1341,6 +1348,7 @@ class MediaPlayer implements MediaPlayerHandle {
   destroy(): void {
     this.decodedAudio?.destroy();
     this.decodedAudio = null;
+    this.refreshControls = null;
     this.applyLiveSubtitle = null;
     this.media = null;
     for (const fn of this.teardown) fn();
