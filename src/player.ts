@@ -70,6 +70,9 @@ export interface MediaPlayerOptions {
   /** Embedded mode (host drives the player, e.g. a subtitle editor): suppress the
    * document-level keyboard shortcuts and the CC/tracks button so the host owns both. */
   embedded?: boolean;
+  /** Video control bar: ours (default) or the browser's. Ours looks the same everywhere and
+   * owns its timeline. Audio, and embedded mode, default to the native bar. */
+  controls?: "own" | "native";
 }
 
 export interface MediaPlayerHandle {
@@ -125,6 +128,25 @@ function ensureStyles(): void {
     /* Fullscreen with an idle mouse: hide our chrome like the native controls do. */
     .ot-media.ot-media-idle { cursor:none; }
     .ot-media.ot-media-idle .ot-media-tracksbtn { opacity:0; pointer-events:none; }
+    .ot-media.ot-media-idle .ot-media-bar { opacity:0; pointer-events:none; }
+    .ot-media-bar { position:absolute; left:0; right:0; bottom:0; z-index:2; box-sizing:border-box;
+      display:flex; align-items:center; gap:10px; padding:14px 12px 8px; color:#fff;
+      font:12px system-ui, sans-serif; transition:opacity .25s;
+      background:linear-gradient(rgba(0,0,0,0), rgba(0,0,0,0.75)); }
+    .ot-media-barbtn { background:none; border:0; color:inherit; font:inherit; font-size:15px; line-height:1;
+      padding:5px 6px; border-radius:6px; cursor:pointer; }
+    .ot-media-barbtn:hover { background:rgba(255,255,255,0.18); }
+    .ot-media-timeline { position:relative; flex:1; height:16px; cursor:pointer; touch-action:none; }
+    /* The groove; the played/buffered bars and the knob sit on top of it. */
+    .ot-media-timeline::before { content:""; position:absolute; left:0; right:0; top:6px; height:4px;
+      border-radius:2px; background:rgba(255,255,255,0.3); }
+    .ot-media-buffered, .ot-media-played { position:absolute; left:0; top:6px; height:4px; width:0; border-radius:2px; }
+    .ot-media-buffered { background:rgba(255,255,255,0.45); }
+    .ot-media-played { background:#e2483d; }
+    .ot-media-knob { position:absolute; top:2px; left:0; width:12px; height:12px; margin-left:-6px;
+      border-radius:50%; background:#e2483d; }
+    .ot-media-clock { font-variant-numeric:tabular-nums; white-space:nowrap; }
+    .ot-media-vol { width:80px; accent-color:#fff; }
     .ot-media-menu { position:absolute; top:44px; left:14px; z-index:3; min-width:200px;
       background:rgba(24,24,30,0.97); color:#eee; font:13px system-ui, sans-serif;
       border:1px solid rgba(255,255,255,0.2); border-radius:10px; padding:6px; }
@@ -237,7 +259,12 @@ class MediaPlayer implements MediaPlayerHandle {
       const m = document.createElement(isAudio ? "audio" : "video") as HTMLMediaElement;
       this.media = m;
       m.src = this.url;
-      m.controls = true;
+      // Embedded hosts (a subtitle editor) keep the native bar unless they ask for ours:
+      // they lay out around the player and drive playback themselves.
+      const ownBar = !isAudio && (this.opts.controls ?? (this.opts.embedded ? "native" : "own")) === "own";
+      m.controls = !ownBar;
+      // Inline playback, or iOS hands the video to the system player and our bar is gone.
+      if (ownBar) (m as HTMLVideoElement).playsInline = true;
       // Standalone: opening a file is intent to play (policy-blocked = stays paused).
       // Embedded (a subtitle editor): the host decides when to play, so don't autoplay.
       m.autoplay = !this.opts.embedded;
@@ -292,6 +319,13 @@ class MediaPlayer implements MediaPlayerHandle {
       if (savedRate && savedRate !== 1) m.addEventListener("loadeddata", () => setRate(savedRate, false), { once: true });
       // Assigned in the video-only tracks section below; C toggles subtitles.
       let toggleSubs: () => void = () => undefined;
+      // Our control bar, built after the tracks section below (it hosts no track UI yet);
+      // the idle-hide and the click handlers there need to know whether it exists.
+      let bar: HTMLElement | null = null;
+      const togglePlay = () => {
+        if (m.paused) void m.play();
+        else m.pause();
+      };
       const toggleFullscreen = () => {
         if (document.fullscreenElement) void document.exitFullscreen();
         else void wrap.requestFullscreen?.().catch(() => undefined); // wrap, so subs/overlays come along
@@ -350,8 +384,7 @@ class MediaPlayer implements MediaPlayerHandle {
         switch (key) {
           case " ":
           case "k":
-            if (m.paused) void m.play();
-            else m.pause();
+            togglePlay();
             break;
           case "f":
             if (isAudio) return;
@@ -519,26 +552,36 @@ class MediaPlayer implements MediaPlayerHandle {
         document.addEventListener("click", closeMenu);
         this.teardown.push(() => document.removeEventListener("click", closeMenu));
 
-        // Fullscreen chrome: hide the CC button (and cursor) after 2.5s of mouse idle,
-        // like the native controls; any movement brings it back.
+        // Hide our chrome (and the cursor) after 2.5s of mouse idle, like the native
+        // controls do: in fullscreen always, and over a playing video once we own the bar.
         let idleTimer = 0;
         const poke = () => {
           wrap.classList.remove("ot-media-idle");
           window.clearTimeout(idleTimer);
-          if (document.fullscreenElement === wrap)
+          if (document.fullscreenElement === wrap || (bar && !m.paused))
             idleTimer = window.setTimeout(() => {
               if (menu.hidden) wrap.classList.add("ot-media-idle");
             }, 2500);
         };
         wrap.addEventListener("pointermove", poke);
+        m.addEventListener("play", poke);
+        m.addEventListener("pause", poke);
 
         // Double-click toggles fullscreen (like F); without this, Chrome's native
         // handler fullscreens the bare video where none of our overlays can live.
         m.addEventListener("dblclick", (e) => {
           const r = m.getBoundingClientRect();
-          if (e.clientY > r.bottom - 70) return; // over the native control bar
+          if (!bar && e.clientY > r.bottom - 70) return; // over the native control bar
           e.preventDefault();
+          window.clearTimeout(clickTimer); // the two clicks must not also toggle playback
           toggleFullscreen();
+        });
+        // Click the picture to play/pause, delayed so a double click only fullscreens.
+        let clickTimer = 0;
+        m.addEventListener("click", () => {
+          if (!bar) return;
+          window.clearTimeout(clickTimer);
+          clickTimer = window.setTimeout(togglePlay, 220);
         });
 
         // Any native path that still fullscreens the bare video (the controls' own
@@ -799,9 +842,113 @@ class MediaPlayer implements MediaPlayerHandle {
         if (ownFs) wrap.appendChild(fsBtn); // iPhone keeps the native one: no element fullscreen there
         wrap.appendChild(fileInput);
       }
+      /** Our control bar: play/pause, timeline with the buffered ranges, clock, volume. */
+      const buildBar = (): HTMLElement => {
+        const el = document.createElement("div");
+        el.className = "ot-media-bar";
+        const playBtn = document.createElement("button");
+        playBtn.type = "button";
+        playBtn.className = "ot-media-barbtn";
+        playBtn.addEventListener("click", togglePlay);
+        const timeline = document.createElement("div");
+        timeline.className = "ot-media-timeline";
+        timeline.setAttribute("role", "slider");
+        timeline.setAttribute("aria-label", S.timeline);
+        const buffered = document.createElement("div");
+        buffered.className = "ot-media-buffered";
+        const played = document.createElement("div");
+        played.className = "ot-media-played";
+        const knob = document.createElement("div");
+        knob.className = "ot-media-knob";
+        timeline.append(buffered, played, knob);
+        const clock = document.createElement("span");
+        clock.className = "ot-media-clock";
+        const muteBtn = document.createElement("button");
+        muteBtn.type = "button";
+        muteBtn.className = "ot-media-barbtn";
+        muteBtn.addEventListener("click", () => {
+          m.muted = !m.muted;
+        });
+        const vol = document.createElement("input");
+        vol.type = "range";
+        vol.className = "ot-media-vol";
+        vol.min = "0";
+        vol.max = "1";
+        vol.step = "0.01";
+        vol.setAttribute("aria-label", S.volume);
+        vol.addEventListener("input", () => {
+          m.volume = Number(vol.value);
+          m.muted = Number(vol.value) === 0;
+        });
+        el.append(playBtn, timeline, clock, muteBtn, vol);
+
+        const pct = (t: number) => (Number.isFinite(m.duration) && m.duration > 0 ? Math.min(100, (t / m.duration) * 100) : 0);
+        const render = () => {
+          const p = pct(m.currentTime);
+          played.style.width = `${p}%`;
+          knob.style.left = `${p}%`;
+          clock.textContent = `${fmtClock(m.currentTime)} / ${Number.isFinite(m.duration) ? fmtClock(m.duration) : "--:--"}`;
+          timeline.setAttribute("aria-valuetext", clock.textContent);
+          const end = m.buffered.length ? m.buffered.end(m.buffered.length - 1) : 0;
+          buffered.style.width = `${pct(end)}%`;
+        };
+        const renderState = () => {
+          playBtn.textContent = m.paused ? "▶" : "❚❚";
+          playBtn.title = m.paused ? S.play : S.pause;
+          muteBtn.textContent = m.muted || !m.volume ? "🔇" : "🔊";
+          muteBtn.title = m.muted ? S.unmute : S.mute;
+          vol.value = String(m.muted ? 0 : m.volume);
+        };
+        // rAF only while playing, for a timeline that moves smoothly (timeupdate fires ~4/s).
+        let raf = 0;
+        const loop = () => {
+          render();
+          raf = requestAnimationFrame(loop);
+        };
+        const startLoop = () => {
+          if (!raf) raf = requestAnimationFrame(loop);
+          renderState();
+        };
+        const stopLoop = () => {
+          cancelAnimationFrame(raf);
+          raf = 0;
+          render();
+          renderState();
+        };
+        m.addEventListener("play", startLoop);
+        m.addEventListener("pause", stopLoop);
+        m.addEventListener("ended", stopLoop);
+        for (const ev of ["loadedmetadata", "timeupdate", "progress", "seeked", "volumechange", "durationchange"])
+          m.addEventListener(ev, () => {
+            render();
+            renderState();
+          });
+        renderState();
+        render();
+
+        // Scrubbing: pointer capture so a drag keeps seeking outside the bar's box.
+        const seekTo = (clientX: number) => {
+          const r = timeline.getBoundingClientRect();
+          if (!r.width || !Number.isFinite(m.duration)) return;
+          m.currentTime = Math.min(m.duration, Math.max(0, ((clientX - r.left) / r.width) * m.duration));
+          render();
+        };
+        timeline.addEventListener("pointerdown", (e) => {
+          timeline.setPointerCapture(e.pointerId);
+          seekTo(e.clientX);
+        });
+        timeline.addEventListener("pointermove", (e) => {
+          if (timeline.hasPointerCapture(e.pointerId)) seekTo(e.clientX);
+        });
+        timeline.addEventListener("pointerup", (e) => timeline.releasePointerCapture(e.pointerId));
+        this.teardown.push(stopLoop);
+        return el;
+      };
+      if (ownBar) bar = buildBar();
       const stage = document.createElement("div");
       stage.className = "ot-media-stage";
       stage.appendChild(m);
+      if (bar) stage.appendChild(bar);
       wrap.appendChild(stage);
       wrap.appendChild(rateBadge);
     } else {

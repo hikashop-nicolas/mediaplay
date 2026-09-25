@@ -16,6 +16,12 @@ export type MediaStrings = {
   loadSubtitles: string;
   audioTracks: string;
   fullscreen: string;
+  play: string;
+  pause: string;
+  mute: string;
+  unmute: string;
+  volume: string;
+  timeline: string;
 };
 
 const en: MediaStrings = {
@@ -31,6 +37,12 @@ const en: MediaStrings = {
   loadSubtitles: "Load subtitle file…",
   audioTracks: "Audio",
   fullscreen: "Fullscreen",
+  play: "Play",
+  pause: "Pause",
+  mute: "Mute",
+  unmute: "Unmute",
+  volume: "Volume",
+  timeline: "Timeline",
 };
 
 const fr: MediaStrings = {
@@ -46,6 +58,12 @@ const fr: MediaStrings = {
   loadSubtitles: "Charger un fichier de sous-titres…",
   audioTracks: "Audio",
   fullscreen: "Plein écran",
+  play: "Lecture",
+  pause: "Pause",
+  mute: "Couper le son",
+  unmute: "Rétablir le son",
+  volume: "Volume",
+  timeline: "Barre de progression",
 };
 
 const ja: MediaStrings = {
@@ -61,6 +79,12 @@ const ja: MediaStrings = {
   loadSubtitles: "字幕ファイルを読み込む…",
   audioTracks: "音声",
   fullscreen: "全画面",
+  play: "再生",
+  pause: "一時停止",
+  mute: "ミュート",
+  unmute: "ミュート解除",
+  volume: "音量",
+  timeline: "シークバー",
 };
 
 const es: MediaStrings = {
@@ -76,6 +100,12 @@ const es: MediaStrings = {
   loadSubtitles: "Cargar un archivo de subtítulos…",
   audioTracks: "Audio",
   fullscreen: "Pantalla completa",
+  play: "Reproducir",
+  pause: "Pausar",
+  mute: "Silenciar",
+  unmute: "Activar el sonido",
+  volume: "Volumen",
+  timeline: "Barra de progreso",
 };
 
 const de: MediaStrings = {
@@ -91,6 +121,12 @@ const de: MediaStrings = {
   loadSubtitles: "Untertiteldatei laden…",
   audioTracks: "Ton",
   fullscreen: "Vollbild",
+  play: "Wiedergabe",
+  pause: "Pause",
+  mute: "Stummschalten",
+  unmute: "Ton einschalten",
+  volume: "Lautstärke",
+  timeline: "Zeitleiste",
 };
 
 const pt: MediaStrings = {
@@ -106,6 +142,12 @@ const pt: MediaStrings = {
   loadSubtitles: "Carregar um ficheiro de legendas…",
   audioTracks: "Áudio",
   fullscreen: "Ecrã inteiro",
+  play: "Reproduzir",
+  pause: "Pausar",
+  mute: "Silenciar",
+  unmute: "Ativar o som",
+  volume: "Volume",
+  timeline: "Barra de progresso",
 };
 
 const ru: MediaStrings = {
@@ -121,6 +163,12 @@ const ru: MediaStrings = {
   loadSubtitles: "Загрузить файл субтитров…",
   audioTracks: "Звук",
   fullscreen: "Во весь экран",
+  play: "Воспроизвести",
+  pause: "Пауза",
+  mute: "Выключить звук",
+  unmute: "Включить звук",
+  volume: "Громкость",
+  timeline: "Шкала времени",
 };
 
 const zh: MediaStrings = {
@@ -136,6 +184,12 @@ const zh: MediaStrings = {
   loadSubtitles: "加载字幕文件…",
   audioTracks: "音频",
   fullscreen: "全屏",
+  play: "播放",
+  pause: "暂停",
+  mute: "静音",
+  unmute: "取消静音",
+  volume: "音量",
+  timeline: "进度条",
 };
 
 const LOCALES: Record<string, MediaStrings> = { en, fr, ja, es, de, pt, ru, zh };
