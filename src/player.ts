@@ -112,7 +112,8 @@ function ensureStyles(): void {
     .ot-media:fullscreen video { width:100%; height:100%; max-width:none; max-height:none; object-fit:contain; }
     /* libass canvas parent: out of the flex flow, pinned to the video's box (octopus
        sets position:relative inline, hence the !important). */
-    .ot-media-stage .libassjs-canvas-parent { position:absolute !important; top:0; left:0; }
+    .ot-media-stage .libassjs-canvas-parent { position:absolute !important; top:0; left:0;
+      pointer-events:none; } /* decoration: a tap on a subtitle still reaches the video */
     .ot-media audio { width:min(90%, 520px); }
     .ot-media-msg { color:#bbb; padding:24px; font:14px system-ui, sans-serif; text-align:center; }
     .ot-media-rate { position:absolute; top:14px; right:16px; z-index:1; pointer-events:none;
@@ -811,12 +812,18 @@ class MediaPlayer implements MediaPlayerHandle {
         // touch tap shows or hides the bar instead, as every phone player does.
         let clickTimer = 0;
         let touched = false;
-        m.addEventListener("pointerdown", (e) => (touched = e.pointerType !== "mouse"));
+        let wasIdle = false;
+        m.addEventListener("pointerdown", (e) => {
+          touched = e.pointerType !== "mouse";
+          // A finger never lands perfectly still: the move pokes the chrome visible before
+          // the click arrives, so the tap must toggle from the state it started in.
+          wasIdle = wrap.classList.contains("ot-media-idle");
+        });
         m.addEventListener("click", () => {
           if (!bar) return;
           window.clearTimeout(clickTimer);
           if (touched && document.fullscreenElement) {
-            if (wrap.classList.contains("ot-media-idle")) poke();
+            if (wasIdle) poke();
             else wrap.classList.add("ot-media-idle");
             return;
           }
