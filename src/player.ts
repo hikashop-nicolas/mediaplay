@@ -115,7 +115,9 @@ function ensureStyles(): void {
        sets position:relative inline, hence the !important). */
     .ot-media-stage .libassjs-canvas-parent { position:absolute !important; top:0; left:0;
       pointer-events:none; } /* decoration: a tap on a subtitle still reaches the video */
-    .ot-media audio { width:min(90%, 520px); }
+    /* A percentage here would resolve against the stage, which sizes itself from this
+       element: the two waited on each other and the player came up empty. */
+    .ot-media audio { width:520px; max-width:100%; }
     .ot-media-msg { color:#bbb; padding:24px; font:14px system-ui, sans-serif; text-align:center; }
     .ot-media-rate { position:absolute; top:14px; right:16px; z-index:1; pointer-events:none;
       background:rgba(20,20,24,0.85); color:#fff; font:600 14px system-ui, sans-serif;
