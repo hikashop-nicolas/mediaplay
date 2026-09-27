@@ -10,6 +10,7 @@
 import { Input, ALL_FORMATS, BufferSource, BlobSource, AudioBufferSink, type InputAudioTrack } from "mediabunny";
 import { setLibavBase, registerAc3Decoder, createDirectAudioDecoder, MKV_LIBAV_CODECS, type DirectFrame } from "./libav-decoder";
 import { readAudioPackets, readAudioPacketsFromBlob, extractMkvInfo, type MkvInfo } from "./mkv";
+import { TimeStretcher } from "./time-stretch";
 
 const LOOKAHEAD = 1.5; // seconds of audio to keep scheduled ahead (survives main-thread stalls)
 const LEAD_IN = 0.05; // small audio-clock headroom at anchor (also the residual A/V offset)
@@ -232,6 +233,11 @@ class SyncedAudio {
       }
     }
     let scheduled = 0;
+    // Off-speed playback: time-stretch rather than resample, so the speed changes and the
+    // pitch does not. A rate change restarts the run, so it is fixed for the whole of one.
+    // At 1x there is nothing to do, and the decoded buffers are scheduled untouched.
+    const rate = this.video.playbackRate || 1;
+    let stretcher: TimeStretcher | null = null;
     // Anchor mapping media-time <-> audio-clock time, fixed for this run so buffers are
     // laid down contiguously (gapless). The video clock is used only to establish the
     // anchor and to detect drift; per-buffer live-clock scheduling made the audio jitter.
@@ -253,7 +259,6 @@ class SyncedAudio {
         const lead = LEAD_IN + this.outputLatency();
         if (!this.anchored && timestamp < this.video.currentTime + lead - 0.02) continue;
 
-        const rate = this.video.playbackRate || 1;
         if (!this.anchored) {
           // Anchor on the buffer's OWN media time, not on the live video position: the two
           // differ by however far the decoder started before the video is now, and taking
@@ -286,9 +291,22 @@ class SyncedAudio {
         // instead of scheduling in the past. Otherwise buffers abut exactly.
         if (nextWhen < this.ctx.currentTime) nextWhen = this.ctx.currentTime;
 
+        let out = buffer;
+        if (rate !== 1) {
+          stretcher ??= new TimeStretcher(buffer.numberOfChannels, buffer.sampleRate, rate);
+          const chans = Array.from({ length: buffer.numberOfChannels }, (_, c) => buffer.getChannelData(c));
+          const stretched = stretcher.push(chans);
+          // The stretcher holds a frame's worth of input back before it can emit anything,
+          // so the first chunk or two of a run produce nothing. The anchor is already set
+          // from the first chunk taken in, which is where this output starts, so waiting
+          // here does not shift the alignment.
+          if (!stretched) continue;
+          out = this.ctx.createBuffer(buffer.numberOfChannels, stretched[0]!.length, buffer.sampleRate);
+          for (const [c, data] of stretched.entries()) out.copyToChannel(data, c);
+        }
+
         const node = this.ctx.createBufferSource();
-        node.buffer = buffer;
-        node.playbackRate.value = rate;
+        node.buffer = out;
         node.connect(this.gain);
         node.onended = () => this.active.delete(node);
         try {
@@ -296,7 +314,9 @@ class SyncedAudio {
         } catch {
           continue;
         }
-        nextWhen += duration / rate;
+        // Stretched output already carries the speed change in its length; a raw buffer
+        // is played untouched, at 1x, and lasts exactly its own duration.
+        nextWhen += rate === 1 ? duration : out.duration;
         this.active.add(node);
         if (++scheduled === 1) this.reseeks = 0;
       }
