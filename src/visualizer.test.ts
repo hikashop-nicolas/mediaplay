@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { drawWindow, scopeLine, triggerOffset } from "./visualizer";
+import { barLevels, drawWindow, scopeLine, triggerOffset } from "./visualizer";
 
 /** `cycles` periods of a sine across `n` samples, starting at `phase` radians. */
 function tone(n: number, cycles: number, phase = 0): Float32Array<ArrayBuffer> {
@@ -75,5 +75,44 @@ describe("the line", () => {
     const line = scopeLine(new Float32Array(1024), 0, 1024, 64);
     expect(line.length).toBe(64);
     expect([...line].every((v) => v === 0)).toBe(true);
+  });
+});
+
+describe("the frequency bars", () => {
+  const bins = (n: number, f: (i: number) => number): Uint8Array<ArrayBuffer> => {
+    const a = new Uint8Array(n);
+    for (let i = 0; i < n; i++) a[i] = f(i);
+    return a;
+  };
+
+  it("gives one level per bar, scaled to 0..1", () => {
+    const levels = barLevels(bins(1024, () => 255), 32);
+    expect(levels.length).toBe(32);
+    expect([...levels].every((v) => v === 1)).toBe(true);
+    expect([...barLevels(bins(1024, () => 0), 32)].every((v) => v === 0), "silence").toBe(true);
+  });
+
+  it("spreads the bins geometrically, so the top end is not one bar", () => {
+    // Linear slices would put everything audible in the left eighth: a tone high in the
+    // spectrum must land in a high bar, not in the last one with everything else.
+    const n = 1024;
+    const high = barLevels(bins(n, (i) => (i === 900 ? 255 : 0)), 32);
+    const low = barLevels(bins(n, (i) => (i === 3 ? 255 : 0)), 32);
+    const loudest = (l: Float32Array) => [...l].indexOf(Math.max(...l));
+    expect(loudest(low), "a low tone sits left").toBeLessThan(8);
+    expect(loudest(high), "a high tone sits right").toBeGreaterThan(24);
+    expect(loudest(high), "but not in the last bar alone").toBeLessThan(32);
+  });
+
+  it("takes the loudest bin a bar covers, so a narrow tone survives", () => {
+    // The widest bars span hundreds of bins; averaging would bury a single loud one.
+    const levels = barLevels(bins(1024, (i) => (i === 1000 ? 200 : 0)), 16);
+    expect(Math.max(...levels)).toBeCloseTo(200 / 255, 3);
+  });
+
+  it("reuses the array it is given", () => {
+    const out = new Float32Array(24);
+    expect(barLevels(bins(512, () => 10), 24, out)).toBe(out);
+    expect(barLevels(bins(512, () => 10), 12, out), "wrong size: a fresh one").not.toBe(out);
   });
 });

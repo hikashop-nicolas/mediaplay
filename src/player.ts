@@ -4,7 +4,7 @@ import { strings, type MediaStrings } from "./i18n";
 import type { SyncedAudioHandle } from "./synced-audio";
 import { registerAlacDecoder, setAlacBase } from "./alac-decoder";
 import type { Thumbnailer } from "./thumbs";
-import { Oscilloscope } from "./visualizer";
+import { Visualizer, type VisualMode } from "./visualizer";
 
 // Matroska audio CodecID -> a MIME to probe the browser with. Only the codecs a browser
 // might refuse (the Dolby / DTS family) need probing; everything else (AAC, MP3, Opus,
@@ -78,8 +78,9 @@ export interface MediaPlayerOptions {
   /** Hover previews on our timeline (video, our bar only). Default: on, off when embedded,
    * where the host has its own timeline. */
   thumbnails?: boolean;
-  /** Oscilloscope over an audio file's empty stage. Default: on, off under
-   * prefers-reduced-motion; the user's own choice in the player wins over both. */
+  /** Visualiser over an audio file's empty stage. Default: the waveform, off under
+   * prefers-reduced-motion; false forces it off, true forces the waveform. The user's own
+   * choice in the player, including the frequency bars, is remembered over both. */
   scope?: boolean;
 }
 
@@ -234,7 +235,8 @@ const SEEK_STEP = 5; // seconds
 const VOLUME_STEP = 0.05;
 const RATE_STEP = 0.2;
 const RATE_KEY = "mediaplay.rate"; // playback speed, remembered across files
-const SCOPE_KEY = "mediaplay.scope"; // oscilloscope on/off, remembered across files
+const SCOPE_KEY = "mediaplay.scope"; // visualiser mode, remembered across files
+const SCOPE_MODES = ["scope", "bars", "off"] as const; // what the button cycles through
 const SCOPE_COLOUR = "#e2483d"; // the same red as the timeline
 
 /** Rebuild the file keeping only the chosen audio track (stream copy), for audio switching:
@@ -1364,59 +1366,69 @@ class MediaPlayer implements MediaPlayerHandle {
     // analyser; the element is muted there, so its own graph would show a flat line.
     const analyser = (): AnalyserNode | null => this.decodedAudio?.analyser() ?? elementAnalyser;
 
-    const scope = new Oscilloscope(canvas, analyser, { colour: SCOPE_COLOUR });
-    this.teardown.push(() => scope.destroy());
+    const viz = new Visualizer(canvas, analyser, { colour: SCOPE_COLOUR });
+    this.teardown.push(() => viz.destroy());
 
-    let on = false;
-    const apply = (next: boolean, save: boolean): void => {
-      on = next;
+    // One button cycling waveform -> bars -> off, labelled with what it is showing: three
+    // states, and a second button for a decoration would crowd a phone.
+    let mode: (typeof SCOPE_MODES)[number] = "off";
+    const label = { scope: S.scope, bars: S.scopeBars, off: S.scopeOff };
+    const apply = (next: (typeof SCOPE_MODES)[number], save: boolean): void => {
+      mode = next;
+      const on = mode !== "off";
       canvas.hidden = !on;
-      btn.setAttribute("aria-pressed", String(on));
+      btn.textContent = label[mode];
       btn.classList.toggle("on", on);
       if (save) {
         try {
-          localStorage.setItem(SCOPE_KEY, on ? "1" : "0");
+          localStorage.setItem(SCOPE_KEY, mode);
         } catch {
           /* private mode */
         }
       }
-      if (!on) return void scope.stop();
-      void buildGraph().then(() => scope.start());
-      scope.start(); // draws the flat line straight away, so the canvas is never blank
+      if (!on) return void viz.stop();
+      viz.setMode(mode as VisualMode);
+      void buildGraph().then(() => viz.start());
+      viz.start(); // draws the empty shape straight away, so the canvas is never blank
     };
-    btn.addEventListener("click", () => apply(!on, true));
+    btn.addEventListener("click", () => apply(SCOPE_MODES[(SCOPE_MODES.indexOf(mode) + 1) % SCOPE_MODES.length]!, true));
     m.addEventListener("play", () => {
       void ctx?.resume().catch(() => undefined);
-      if (on) void buildGraph().then(() => scope.start());
+      if (mode !== "off") void buildGraph().then(() => viz.start());
     });
     // Autoplay starts before any gesture, so the graph cannot be built yet, and a later
     // play() on an already-playing element fires no event to try again: watch for the
     // gesture itself, as the decoded path does, and stop once there is a graph.
     const gestures = ["pointerdown", "keydown", "touchstart"];
     const onGesture = () => {
-      if (!on) return;
+      if (mode === "off") return;
       void buildGraph().then(() => {
         if (elementAnalyser) {
           dropGesture();
-          scope.start();
+          viz.start();
         }
       });
     };
     const dropGesture = () => gestures.forEach((ev) => document.removeEventListener(ev, onGesture));
     gestures.forEach((ev) => document.addEventListener(ev, onGesture, { passive: true }));
     this.teardown.push(dropGesture);
-    m.addEventListener("pause", () => scope.pause()); // freeze the trace, like a scope on hold
-    m.addEventListener("ended", () => scope.pause());
+    m.addEventListener("pause", () => viz.pause()); // freeze the trace, like a scope on hold
+    m.addEventListener("ended", () => viz.pause());
 
-    // Default on, since that stage is empty anyway, except where motion is unwelcome.
+    // Waveform by default, since that stage is empty anyway, except where motion is
+    // unwelcome. "1" and "0" are what the first version of this stored.
     let saved: string | null = null;
     try {
       saved = localStorage.getItem(SCOPE_KEY);
     } catch {
       /* private mode */
     }
+    if (saved === "1") saved = "scope";
+    else if (saved === "0") saved = "off";
     const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-    apply(this.opts.scope ?? (saved === null ? !reduced : saved === "1"), false);
+    const host = this.opts.scope === undefined ? null : this.opts.scope ? "scope" : "off";
+    const chosen = saved ?? host ?? (reduced ? "off" : "scope"); // a choice made here outlives the host's default
+    apply(SCOPE_MODES.includes(chosen as (typeof SCOPE_MODES)[number]) ? (chosen as (typeof SCOPE_MODES)[number]) : "scope", false);
   }
 
   /** Decode an AC-3/E-AC-3 track with libav and play it in sync with the muted video. */
