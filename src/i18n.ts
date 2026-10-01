@@ -23,6 +23,7 @@ export type MediaStrings = {
   volume: string;
   timeline: string;
   speed: string;
+  scope: string;
 };
 
 const en: MediaStrings = {
@@ -43,7 +44,7 @@ const en: MediaStrings = {
   mute: "Mute",
   unmute: "Unmute",
   volume: "Volume",
-  timeline: "Timeline",  speed: "Speed",
+  timeline: "Timeline",  speed: "Speed",  scope: "Oscilloscope",
 };
 
 const fr: MediaStrings = {
@@ -64,7 +65,7 @@ const fr: MediaStrings = {
   mute: "Couper le son",
   unmute: "Rétablir le son",
   volume: "Volume",
-  timeline: "Barre de progression",  speed: "Vitesse",
+  timeline: "Barre de progression",  speed: "Vitesse",  scope: "Oscilloscope",
 };
 
 const ja: MediaStrings = {
@@ -85,7 +86,7 @@ const ja: MediaStrings = {
   mute: "ミュート",
   unmute: "ミュート解除",
   volume: "音量",
-  timeline: "シークバー",  speed: "再生速度",
+  timeline: "シークバー",  speed: "再生速度",  scope: "オシロスコープ",
 };
 
 const es: MediaStrings = {
@@ -106,7 +107,7 @@ const es: MediaStrings = {
   mute: "Silenciar",
   unmute: "Activar el sonido",
   volume: "Volumen",
-  timeline: "Barra de progreso",  speed: "Velocidad",
+  timeline: "Barra de progreso",  speed: "Velocidad",  scope: "Osciloscopio",
 };
 
 const de: MediaStrings = {
@@ -127,7 +128,7 @@ const de: MediaStrings = {
   mute: "Stummschalten",
   unmute: "Ton einschalten",
   volume: "Lautstärke",
-  timeline: "Zeitleiste",  speed: "Geschwindigkeit",
+  timeline: "Zeitleiste",  speed: "Geschwindigkeit",  scope: "Oszilloskop",
 };
 
 const pt: MediaStrings = {
@@ -148,7 +149,7 @@ const pt: MediaStrings = {
   mute: "Silenciar",
   unmute: "Ativar o som",
   volume: "Volume",
-  timeline: "Barra de progresso",  speed: "Velocidade",
+  timeline: "Barra de progresso",  speed: "Velocidade",  scope: "Osciloscópio",
 };
 
 const ru: MediaStrings = {
@@ -169,7 +170,7 @@ const ru: MediaStrings = {
   mute: "Выключить звук",
   unmute: "Включить звук",
   volume: "Громкость",
-  timeline: "Шкала времени",  speed: "Скорость",
+  timeline: "Шкала времени",  speed: "Скорость",  scope: "Осциллограф",
 };
 
 const zh: MediaStrings = {
@@ -190,7 +191,7 @@ const zh: MediaStrings = {
   mute: "静音",
   unmute: "取消静音",
   volume: "音量",
-  timeline: "进度条",  speed: "播放速度",
+  timeline: "进度条",  speed: "播放速度",  scope: "示波器",
 };
 
 const LOCALES: Record<string, MediaStrings> = { en, fr, ja, es, de, pt, ru, zh };

@@ -24,6 +24,8 @@ export interface SyncedAudioHandle {
   /** True while the video element is muted only so it could autoplay: the sound is coming
    * from here, so a player's mute button must not show it as muted. */
   forceMuted(): boolean;
+  /** The node the sound passes through on its way out, for a visualizer. */
+  analyser(): AnalyserNode;
   destroy(): void;
 }
 
@@ -329,6 +331,10 @@ class SyncedAudio {
     return !this.muteSynced;
   }
 
+  getAnalyser(): AnalyserNode {
+    return this.analyser;
+  }
+
   destroy(): void {
     this.disposed = true;
     this.token++;
@@ -509,6 +515,7 @@ export async function playSyncedAudio(
     engine.start();
     return {
       forceMuted: () => engine.forceMuted(),
+      analyser: () => engine.getAnalyser(),
       destroy: () => {
         engine.destroy();
         if (currentEngine === engine) currentEngine = null;

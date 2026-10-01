@@ -4,6 +4,7 @@ import { strings, type MediaStrings } from "./i18n";
 import type { SyncedAudioHandle } from "./synced-audio";
 import { registerAlacDecoder, setAlacBase } from "./alac-decoder";
 import type { Thumbnailer } from "./thumbs";
+import { Oscilloscope } from "./visualizer";
 
 // Matroska audio CodecID -> a MIME to probe the browser with. Only the codecs a browser
 // might refuse (the Dolby / DTS family) need probing; everything else (AAC, MP3, Opus,
@@ -77,6 +78,9 @@ export interface MediaPlayerOptions {
   /** Hover previews on our timeline (video, our bar only). Default: on, off when embedded,
    * where the host has its own timeline. */
   thumbnails?: boolean;
+  /** Oscilloscope over an audio file's empty stage. Default: on, off under
+   * prefers-reduced-motion; the user's own choice in the player wins over both. */
+  scope?: boolean;
 }
 
 export interface MediaPlayerHandle {
@@ -118,6 +122,16 @@ function ensureStyles(): void {
     /* A percentage here would resolve against the stage, which sizes itself from this
        element: the two waited on each other and the player came up empty. */
     .ot-media audio { width:520px; max-width:100%; }
+    /* Oscilloscope: same width as the audio element, above it, with its switch over them. */
+    .ot-media-scoperow { display:flex; justify-content:flex-end; width:520px; max-width:100%; padding:0 0 6px; }
+    .ot-media-vizbtn { background:rgba(20,20,24,0.85); color:#fff; font:600 12px system-ui, sans-serif;
+      padding:5px 10px; border:1px solid rgba(255,255,255,0.25); border-radius:8px; cursor:pointer; }
+    .ot-media-vizbtn.on { background:rgba(226,72,61,0.85); border-color:rgba(255,255,255,0.4); }
+    @media (hover: hover) { .ot-media-vizbtn:hover { background:rgba(60,60,70,0.9); } }
+    .ot-media-vizbtn:focus-visible { outline:2px solid #fff; outline-offset:2px; }
+    .ot-media-scope { display:block; width:520px; max-width:100%; height:140px; margin-bottom:8px;
+      background:#0b0b0f; border-radius:8px; }
+    .ot-media-scope[hidden] { display:none; }
     .ot-media-msg { color:#bbb; padding:24px; font:14px system-ui, sans-serif; text-align:center; }
     .ot-media-rate { position:absolute; top:14px; right:16px; z-index:1; pointer-events:none;
       background:rgba(20,20,24,0.85); color:#fff; font:600 14px system-ui, sans-serif;
@@ -220,6 +234,8 @@ const SEEK_STEP = 5; // seconds
 const VOLUME_STEP = 0.05;
 const RATE_STEP = 0.2;
 const RATE_KEY = "mediaplay.rate"; // playback speed, remembered across files
+const SCOPE_KEY = "mediaplay.scope"; // oscilloscope on/off, remembered across files
+const SCOPE_COLOUR = "#e2483d"; // the same red as the timeline
 
 /** Rebuild the file keeping only the chosen audio track (stream copy), for audio switching:
  * browsers expose no API to pick among a file's embedded audio tracks. */
@@ -395,6 +411,9 @@ class MediaPlayer implements MediaPlayerHandle {
       const stage = document.createElement("div");
       stage.className = "ot-media-stage";
       stage.appendChild(m);
+      // An audio file leaves this stage empty above the controls, which is what the
+      // oscilloscope fills. Video keeps its picture.
+      if (isAudio) this.mountScope(stage, m, S);
       const togglePlay = () => {
         if (m.paused) void m.play();
         else m.pause();
@@ -1291,6 +1310,113 @@ class MediaPlayer implements MediaPlayerHandle {
     container.appendChild(wrap);
     this.wrap = wrap;
     wrap.focus();
+  }
+
+  /** The oscilloscope over an audio file's empty stage, with its own on/off button.
+   *  Drawing is in visualizer.ts; what lives here is where the samples come from. */
+  private mountScope(stage: HTMLElement, m: HTMLMediaElement, S: MediaStrings): void {
+    const AudioCtx = window.AudioContext ?? (window as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioCtx) return; // no Web Audio: no scope, and no button promising one
+    const row = document.createElement("div");
+    row.className = "ot-media-scoperow";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "ot-media-vizbtn";
+    btn.textContent = S.scope;
+    row.appendChild(btn);
+    const canvas = document.createElement("canvas");
+    canvas.className = "ot-media-scope";
+    canvas.setAttribute("aria-hidden", "true"); // decoration: the audio is the content
+    stage.insertBefore(row, m);
+    stage.insertBefore(canvas, m);
+
+    // The element's own graph, built once. Routing an element through a suspended context
+    // plays it silently, so this waits until a context actually runs (that needs a user
+    // gesture in every browser) and leaves the scope flat until then.
+    let ctx: AudioContext | null = null;
+    let elementAnalyser: AnalyserNode | null = null;
+    let building = false;
+    const buildGraph = async (): Promise<void> => {
+      if (elementAnalyser || building || this.decodedAudio) return;
+      building = true;
+      try {
+        const c = new AudioCtx();
+        await c.resume().catch(() => undefined);
+        if (c.state !== "running") {
+          await c.close().catch(() => undefined);
+          return; // no user gesture yet; a later play or click tries again
+        }
+        const src = c.createMediaElementSource(m);
+        const an = c.createAnalyser();
+        an.fftSize = 2048;
+        src.connect(an);
+        an.connect(c.destination); // the analyser passes the sound through, so this is the output
+        ctx = c;
+        elementAnalyser = an;
+        this.teardown.push(() => void ctx?.close().catch(() => undefined));
+      } catch (e) {
+        console.warn("[mediaplay:scope] no analyser for this element:", e);
+      } finally {
+        building = false;
+      }
+    };
+    // AC-3, DTS, TrueHD and ALAC carry their sound in their own graph, which already has an
+    // analyser; the element is muted there, so its own graph would show a flat line.
+    const analyser = (): AnalyserNode | null => this.decodedAudio?.analyser() ?? elementAnalyser;
+
+    const scope = new Oscilloscope(canvas, analyser, { colour: SCOPE_COLOUR });
+    this.teardown.push(() => scope.destroy());
+
+    let on = false;
+    const apply = (next: boolean, save: boolean): void => {
+      on = next;
+      canvas.hidden = !on;
+      btn.setAttribute("aria-pressed", String(on));
+      btn.classList.toggle("on", on);
+      if (save) {
+        try {
+          localStorage.setItem(SCOPE_KEY, on ? "1" : "0");
+        } catch {
+          /* private mode */
+        }
+      }
+      if (!on) return void scope.stop();
+      void buildGraph().then(() => scope.start());
+      scope.start(); // draws the flat line straight away, so the canvas is never blank
+    };
+    btn.addEventListener("click", () => apply(!on, true));
+    m.addEventListener("play", () => {
+      void ctx?.resume().catch(() => undefined);
+      if (on) void buildGraph().then(() => scope.start());
+    });
+    // Autoplay starts before any gesture, so the graph cannot be built yet, and a later
+    // play() on an already-playing element fires no event to try again: watch for the
+    // gesture itself, as the decoded path does, and stop once there is a graph.
+    const gestures = ["pointerdown", "keydown", "touchstart"];
+    const onGesture = () => {
+      if (!on) return;
+      void buildGraph().then(() => {
+        if (elementAnalyser) {
+          dropGesture();
+          scope.start();
+        }
+      });
+    };
+    const dropGesture = () => gestures.forEach((ev) => document.removeEventListener(ev, onGesture));
+    gestures.forEach((ev) => document.addEventListener(ev, onGesture, { passive: true }));
+    this.teardown.push(dropGesture);
+    m.addEventListener("pause", () => scope.pause()); // freeze the trace, like a scope on hold
+    m.addEventListener("ended", () => scope.pause());
+
+    // Default on, since that stage is empty anyway, except where motion is unwelcome.
+    let saved: string | null = null;
+    try {
+      saved = localStorage.getItem(SCOPE_KEY);
+    } catch {
+      /* private mode */
+    }
+    const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+    apply(this.opts.scope ?? (saved === null ? !reduced : saved === "1"), false);
   }
 
   /** Decode an AC-3/E-AC-3 track with libav and play it in sync with the muted video. */
