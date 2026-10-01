@@ -125,9 +125,13 @@ function ensureStyles(): void {
     .ot-media audio { width:520px; max-width:100%; }
     /* Oscilloscope: same width as the audio element, above it, with its switch over them. */
     .ot-media-scoperow { display:flex; justify-content:flex-end; width:520px; max-width:100%; padding:0 0 6px; }
-    .ot-media-vizbtn { background:rgba(20,20,24,0.85); color:#fff; font:600 12px system-ui, sans-serif;
-      padding:5px 10px; border:1px solid rgba(255,255,255,0.25); border-radius:8px; cursor:pointer; }
-    .ot-media-vizbtn.on { background:rgba(226,72,61,0.85); border-color:rgba(255,255,255,0.4); }
+    /* 44px of height: this is a phone control, and the row has the space for it. */
+    .ot-media-vizbtn { display:inline-flex; align-items:center; min-height:44px; padding:0 14px;
+      background:rgba(20,20,24,0.85); color:#fff; font:600 13px system-ui, sans-serif;
+      border:1px solid rgba(255,255,255,0.25); border-radius:10px; cursor:pointer; }
+    /* The state is in the label text, never in the colour alone; the tint only seconds it.
+       A filled accent background would put white text at 3.3:1, under the 4.5:1 needed. */
+    .ot-media-vizbtn.on { color:#f3a39c; border-color:rgba(243,163,156,0.5); }
     @media (hover: hover) { .ot-media-vizbtn:hover { background:rgba(60,60,70,0.9); } }
     .ot-media-vizbtn:focus-visible { outline:2px solid #fff; outline-offset:2px; }
     .ot-media-scope { display:block; width:520px; max-width:100%; height:140px; margin-bottom:8px;
@@ -1325,6 +1329,7 @@ class MediaPlayer implements MediaPlayerHandle {
     btn.type = "button";
     btn.className = "ot-media-vizbtn";
     btn.textContent = S.scope;
+    btn.setAttribute("aria-live", "polite"); // the label is the state, so read the change
     row.appendChild(btn);
     const canvas = document.createElement("canvas");
     canvas.className = "ot-media-scope";
@@ -1378,6 +1383,9 @@ class MediaPlayer implements MediaPlayerHandle {
       const on = mode !== "off";
       canvas.hidden = !on;
       btn.textContent = label[mode];
+      // The visible label is just the mode, which says nothing on its own out of context:
+      // the accessible name carries what the control is as well as where it stands.
+      btn.setAttribute("aria-label", `${S.visualiser}: ${label[mode]}`);
       btn.classList.toggle("on", on);
       if (save) {
         try {

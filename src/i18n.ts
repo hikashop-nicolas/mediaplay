@@ -26,6 +26,7 @@ export type MediaStrings = {
   scope: string;
   scopeBars: string;
   scopeOff: string;
+  visualiser: string;
 };
 
 const en: MediaStrings = {
@@ -47,7 +48,7 @@ const en: MediaStrings = {
   unmute: "Unmute",
   volume: "Volume",
   timeline: "Timeline",  speed: "Speed",  scope: "Oscilloscope",
-  scopeBars: "Bars",  scopeOff: "No visualiser",
+  scopeBars: "Bars",  scopeOff: "No visualiser",    visualiser: "Visualiser",
 };
 
 const fr: MediaStrings = {
@@ -69,7 +70,7 @@ const fr: MediaStrings = {
   unmute: "Rétablir le son",
   volume: "Volume",
   timeline: "Barre de progression",  speed: "Vitesse",  scope: "Oscilloscope",
-  scopeBars: "Barres",  scopeOff: "Aucune visualisation",
+  scopeBars: "Barres",  scopeOff: "Aucune visualisation",    visualiser: "Visualisation",
 };
 
 const ja: MediaStrings = {
@@ -91,7 +92,7 @@ const ja: MediaStrings = {
   unmute: "ミュート解除",
   volume: "音量",
   timeline: "シークバー",  speed: "再生速度",  scope: "オシロスコープ",
-  scopeBars: "バー",  scopeOff: "表示なし",
+  scopeBars: "バー",  scopeOff: "表示なし",    visualiser: "ビジュアライザー",
 };
 
 const es: MediaStrings = {
@@ -113,7 +114,7 @@ const es: MediaStrings = {
   unmute: "Activar el sonido",
   volume: "Volumen",
   timeline: "Barra de progreso",  speed: "Velocidad",  scope: "Osciloscopio",
-  scopeBars: "Barras",  scopeOff: "Sin visualización",
+  scopeBars: "Barras",  scopeOff: "Sin visualización",    visualiser: "Visualizador",
 };
 
 const de: MediaStrings = {
@@ -135,7 +136,7 @@ const de: MediaStrings = {
   unmute: "Ton einschalten",
   volume: "Lautstärke",
   timeline: "Zeitleiste",  speed: "Geschwindigkeit",  scope: "Oszilloskop",
-  scopeBars: "Balken",  scopeOff: "Keine Visualisierung",
+  scopeBars: "Balken",  scopeOff: "Keine Visualisierung",    visualiser: "Visualisierung",
 };
 
 const pt: MediaStrings = {
@@ -157,7 +158,7 @@ const pt: MediaStrings = {
   unmute: "Ativar o som",
   volume: "Volume",
   timeline: "Barra de progresso",  speed: "Velocidade",  scope: "Osciloscópio",
-  scopeBars: "Barras",  scopeOff: "Sem visualização",
+  scopeBars: "Barras",  scopeOff: "Sem visualização",    visualiser: "Visualizador",
 };
 
 const ru: MediaStrings = {
@@ -179,7 +180,7 @@ const ru: MediaStrings = {
   unmute: "Включить звук",
   volume: "Громкость",
   timeline: "Шкала времени",  speed: "Скорость",  scope: "Осциллограф",
-  scopeBars: "Полосы",  scopeOff: "Без визуализации",
+  scopeBars: "Полосы",  scopeOff: "Без визуализации",    visualiser: "Визуализация",
 };
 
 const zh: MediaStrings = {
@@ -201,7 +202,7 @@ const zh: MediaStrings = {
   unmute: "取消静音",
   volume: "音量",
   timeline: "进度条",  speed: "播放速度",  scope: "示波器",
-  scopeBars: "频谱条",  scopeOff: "不显示",
+  scopeBars: "频谱条",  scopeOff: "不显示",    visualiser: "可视化",
 };
 
 const LOCALES: Record<string, MediaStrings> = { en, fr, ja, es, de, pt, ru, zh };
