@@ -893,13 +893,16 @@ class MediaPlayer implements MediaPlayerHandle {
             if (stopped || octopus !== (oct as unknown)) return;
             const gap = md.mediaTime - last;
             last = md.mediaTime;
-            if (gap > 0.005 && gap < 0.2) frame = frame ? frame * 0.9 + gap * 0.1 : gap;
+            // The shortest gap seen is the frame interval: a longer one means a frame was
+            // dropped or the page stalled, and averaging those in would aim too far ahead.
+            if (gap > 0.005 && gap < 0.2 && (!frame || gap < frame)) frame = gap;
             const skew = md.mediaTime - v.currentTime;
             // What we draw now is shown one display refresh later than the picture already on
             // screen, so aim that far ahead, and at the middle of the frame that lands on, so
-            // timing noise cannot reach its neighbours.
+            // timing noise cannot reach its neighbours. Never lead by more than a frame and a
+            // half: on a page too slow to paint every frame, aiming further is just wrong.
             if (frame && paint && skew > 0 && skew < 0.2) {
-              const want = skew + frame / 2 + paint;
+              const want = Math.min(skew + frame / 2 + Math.min(paint, frame), frame * 1.5);
               if (Math.abs(want - offset) > 0.005) {
                 offset = want;
                 oct.timeOffset = want;
@@ -911,7 +914,8 @@ class MediaPlayer implements MediaPlayerHandle {
             if (stopped || octopus !== (oct as unknown)) return;
             const d = lastPaint ? (now - lastPaint) / 1000 : 0;
             lastPaint = now;
-            if (d > 0.002 && d < 0.1) paint = paint ? paint * 0.9 + d * 0.1 : d;
+            // Likewise the display's own interval: the shortest, not the average.
+            if (d > 0.002 && d < 0.1 && (!paint || d < paint)) paint = d;
             requestAnimationFrame(onPaint);
           };
           requestAnimationFrame(onPaint);
