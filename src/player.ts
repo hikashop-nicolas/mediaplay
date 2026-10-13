@@ -48,6 +48,14 @@ export interface MediaSource {
   filename?: string;
 }
 
+/** How much libass output to keep rendered ahead of the picture, in MiB. */
+const RENDER_AHEAD_MIB = 30;
+
+/** The part of the libass renderer we drive by hand: its time offset. */
+interface OctopusTiming {
+  timeOffset: number;
+}
+
 /** Where the libass (SubtitlesOctopus) worker + fallback font are served from. */
 export interface LibassAssets {
   /** Same-origin URL of subtitles-octopus-worker.js (its .wasm sits beside it). */
@@ -856,6 +864,59 @@ class MediaPlayer implements MediaPlayerHandle {
           wrap.querySelector(".libassjs-canvas-parent")?.remove(); // stage child
         };
         this.teardown.push(dropOctopus);
+        // libass renders for video.currentTime, which trails the picture on screen, so
+        // subtitles typeset one event per frame (to sit on moving text) draw a frame or more
+        // late. Measure the real timing off the frame callback and lead by it.
+        const followFrames = (oct: OctopusTiming) => {
+          const v = m as HTMLVideoElement & {
+            requestVideoFrameCallback?: (cb: (now: number, md: { mediaTime: number }) => void) => number;
+          };
+          if (!v.requestVideoFrameCallback) return;
+          let offset = 0;
+          let frame = 0;
+          let last = -1;
+          let paint = 0;
+          let lastPaint = 0;
+          let stopped = false;
+          this.teardown.push(() => { stopped = true; });
+          // Paused, the picture is simply the frame at currentTime, so the lead would show
+          // the next frame's subtitle: drop it, and let playback measure it again.
+          const onPause = () => { if (octopus === (oct as unknown)) oct.timeOffset = 0; };
+          const onPlay = () => { if (octopus === (oct as unknown) && offset) oct.timeOffset = offset; };
+          m.addEventListener("pause", onPause);
+          m.addEventListener("playing", onPlay);
+          this.teardown.push(() => {
+            m.removeEventListener("pause", onPause);
+            m.removeEventListener("playing", onPlay);
+          });
+          const step = (_now: number, md: { mediaTime: number }): void => {
+            if (stopped || octopus !== (oct as unknown)) return;
+            const gap = md.mediaTime - last;
+            last = md.mediaTime;
+            if (gap > 0.005 && gap < 0.2) frame = frame ? frame * 0.9 + gap * 0.1 : gap;
+            const skew = md.mediaTime - v.currentTime;
+            // What we draw now is shown one display refresh later than the picture already on
+            // screen, so aim that far ahead, and at the middle of the frame that lands on, so
+            // timing noise cannot reach its neighbours.
+            if (frame && paint && skew > 0 && skew < 0.2) {
+              const want = skew + frame / 2 + paint;
+              if (Math.abs(want - offset) > 0.005) {
+                offset = want;
+                oct.timeOffset = want;
+              }
+            }
+            v.requestVideoFrameCallback?.(step);
+          };
+          const onPaint = (now: number): void => {
+            if (stopped || octopus !== (oct as unknown)) return;
+            const d = lastPaint ? (now - lastPaint) / 1000 : 0;
+            lastPaint = now;
+            if (d > 0.002 && d < 0.1) paint = paint ? paint * 0.9 + d * 0.1 : d;
+            requestAnimationFrame(onPaint);
+          };
+          requestAnimationFrame(onPaint);
+          v.requestVideoFrameCallback(step);
+        };
         // Styled ASS rendering via SubtitlesOctopus (libass WASM, same-origin worker
         // assets under octopus/). Falls back to the plain-text VTT track on failure.
         const startOctopus = async (i: number) => {
@@ -874,8 +935,13 @@ class MediaPlayer implements MediaPlayerHandle {
                 dropOctopus();
                 showVttFallback(i);
               },
+              // Render events ahead into a buffer, in MiB: drawing is then a copy rather
+              // than a worker round trip that lands a frame or two after the picture.
+              // Missing from the package's types, hence the cast.
+              ...({ renderAhead: RENDER_AHEAD_MIB } as object),
             });
             octopusFor = i;
+            followFrames(octopus as unknown as OctopusTiming);
           } catch {
             showVttFallback(i);
           }
