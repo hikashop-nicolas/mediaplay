@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { entriesFromFiles, entriesFromPlaylist, fileFinder, isAudioName, isMediaName } from "./sources";
+import { entriesFromFiles, entriesFromPlaylist, fileFinder, isAudioName, isMediaName, playlistFromEntries } from "./sources";
 
 /** A File that claims a place inside a picked folder, as the browser's folder input does. */
 function file(name: string, folder = ""): File {
@@ -25,6 +25,13 @@ describe("a folder or a pile of files", () => {
     expect(isMediaName("a.pdf")).toBe(false);
     expect(isAudioName("a.mp3")).toBe(true);
     expect(isAudioName("a.mkv")).toBe(false);
+  });
+
+  it("remembers where each entry came from, for saving the queue again", () => {
+    const [a] = entriesFromFiles([file("one.mp3", "Album")]);
+    expect(a!.source).toBe("Album/one.mp3");
+    const [b] = entriesFromPlaylist([{ path: "..\\x\\two.mp3", title: "Two" }], () => undefined);
+    expect(b!.source).toBe("..\\x\\two.mp3");
   });
 
   it("gives the player the file itself, with a type, when the entry's turn comes", async () => {
@@ -79,5 +86,28 @@ describe("what a playlist points at", () => {
     expect((await entries[0]!.load()).blob).toBeInstanceOf(File);
     expect(entries[1]!.title).toBe("gone.mp3");
     expect((await entries[2]!.load()).url).toBe("https://example.test/live.mp3");
+  });
+});
+
+describe("saving a queue as a playlist", () => {
+  it("drops the picked folder's name so the playlist travels with the folder", () => {
+    const entries = entriesFromFiles([file("02 Two.mp3", "Album"), file("01 One.mp3", "Album")]);
+    expect(playlistFromEntries(entries).map((e) => e.path)).toEqual(["01 One.mp3", "02 Two.mp3"]);
+  });
+
+  it("keeps the title it read from the tags, and the length", () => {
+    const [entry] = entriesFromFiles([file("01 One.mp3", "Album")]);
+    entry!.title = "A Real Title";
+    entry!.artist = "Band";
+    entry!.duration = 61;
+    expect(playlistFromEntries([entry!])).toEqual([{ path: "01 One.mp3", title: "A Real Title", artist: "Band", duration: 61 }]);
+  });
+
+  it("keeps a path a playlist wrote itself, and files picked one by one", () => {
+    const entries = [
+      ...entriesFromPlaylist([{ path: "C:\\Music\\a.mp3" }, { path: "https://example.test/r.mp3", title: "Radio" }], () => undefined),
+      ...entriesFromFiles([file("loose.mp3")]),
+    ];
+    expect(playlistFromEntries(entries).map((e) => e.path)).toEqual(["C:\\Music\\a.mp3", "https://example.test/r.mp3", "loose.mp3"]);
   });
 });

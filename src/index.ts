@@ -42,5 +42,5 @@ export {
   type MkvSubtitleTrack,
   type MkvAudioTrack,
 } from "./mkv";
-export { sortMedia, entriesFromFiles, entriesFromPlaylist, entryFromFile, fileFinder, isMediaName, isAudioName } from "./sources";
+export { playlistFromEntries, sortMedia, entriesFromFiles, entriesFromPlaylist, entryFromFile, fileFinder, isMediaName, isAudioName } from "./sources";
 export { readDropped } from "./dropped";

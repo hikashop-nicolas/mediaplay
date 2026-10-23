@@ -45,6 +45,7 @@ export function entryFromFile(file: File): QueueEntry {
   const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
   return {
     title: file.name,
+    source: relativePath(file),
     audio: isAudioName(file.name),
     load: async () => ({ blob: file, mime: file.type || EXT_MIME[ext] || "", filename: file.name }),
   };
@@ -104,6 +105,7 @@ export function entriesFromPlaylist(
     const label = item.title ?? item.path.split(/[\\/]/).pop() ?? item.path;
     const base: QueueEntry = {
       title: label,
+      source: item.path,
       artist: item.artist,
       duration: item.duration,
       audio: isAudioName(item.path) || undefined,
@@ -117,6 +119,25 @@ export function entriesFromPlaylist(
     const file = find(item.path);
     if (!file) return { ...base, unavailable: "missing" };
     const entry = entryFromFile(file);
-    return { ...entry, title: item.title ?? entry.title, artist: item.artist, duration: item.duration };
+    return { ...entry, title: item.title ?? entry.title, source: item.path, artist: item.artist, duration: item.duration };
+  });
+}
+
+/**
+ * Playlist lines for a queue, ready for writeM3u. Entries made from a picked folder carry
+ * "Album/01.mp3"; saved beside the files the folder name goes, so the playlist keeps working
+ * when the folder is moved. A path a playlist spelled itself is kept as it was.
+ */
+export function playlistFromEntries(entries: readonly QueueEntry[]): PlaylistEntry[] {
+  const sources = entries.map((e) => e.source ?? e.title);
+  const roots = new Set(sources.map((s) => (s.includes("/") && !/^(\.\.|[a-z]:)/i.test(s) && !s.startsWith("/") ? s.split("/")[0] : "")));
+  const strip = roots.size === 1 && !roots.has("");
+  return entries.map((e, i) => {
+    const source = sources[i]!;
+    const line: PlaylistEntry = { path: strip ? source.split("/").slice(1).join("/") : source };
+    if (e.title && e.title !== line.path.split(/[\\/]/).pop()) line.title = e.title;
+    if (e.artist) line.artist = e.artist;
+    if (e.duration) line.duration = e.duration;
+    return line;
   });
 }

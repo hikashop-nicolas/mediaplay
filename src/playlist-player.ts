@@ -20,6 +20,8 @@ export interface QueueEntry {
   load: () => Promise<MediaSource>;
   /** True or false when the host knows; otherwise it is guessed from the name. */
   audio?: boolean;
+  /** Where it came from, as a path or an address: what a playlist saved from this queue should say. */
+  source?: string;
   /** Why this entry cannot play yet: no file next to the playlist, or an address on the web. */
   unavailable?: "missing" | "remote";
 }
