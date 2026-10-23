@@ -64,14 +64,14 @@ export class PlayQueue {
 
   /**
    * The entry after this one, or null when playback should stop. `auto` is the entry ending
-   * by itself; a person pressing Next at the end of the last entry gets null too, which
-   * leaves things as they are rather than starting over.
+   * by itself, which stops after the last one unless repeat is on. A person pressing Next on
+   * the last entry is asking for another, so it wraps to the first whatever repeat says.
    */
   next(auto: boolean): number | null {
     if (!this.n) return null;
     if (auto && this.repeatMode === "one") return this.cur;
     if (this.pos + 1 < this.n) return this.land(this.pos + 1);
-    if (this.repeatMode === "all") {
+    if (this.repeatMode === "all" || !auto) {
       if (this.shuffled) this.reshuffleKeepingLastApart();
       return this.land(0);
     }

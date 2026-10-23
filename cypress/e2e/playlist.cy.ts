@@ -81,6 +81,14 @@ describe("a queue of audio files", () => {
     until((h) => expect(h.getIndex()).to.equal(0));
   });
 
+  it("goes back to the first file when Next is pressed on the last, with repeat off", () => {
+    cy.get('.ot-pl-btn[aria-label="Next"]').click();
+    cy.get('.ot-pl-btn[aria-label="Next"]').click();
+    until((h) => expect(h.getIndex()).to.equal(2));
+    cy.get('.ot-pl-btn[aria-label="Next"]').click();
+    until((h) => expect(h.getIndex(), "wrapped by hand").to.equal(0));
+  });
+
   it("cycles repeat with its button, and says which mode it is in", () => {
     cy.get('.ot-pl-btn[aria-label="Repeat: off"]').first().click();
     cy.get('.ot-pl-btn[aria-label="Repeat: all"]').first().click();

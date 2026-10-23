@@ -47,9 +47,15 @@ describe("a queue in order", () => {
     expect(q.next(false)).toBe(1);
   });
 
-  it("does nothing when Next is pressed on the last entry with repeat off", () => {
+  it("wraps to the first entry when a person presses Next on the last one, repeat or not", () => {
     const q = new PlayQueue(2, { startIndex: 1 });
-    expect(q.next(false)).toBeNull();
+    expect(q.next(false)).toBe(0);
+    expect(q.index).toBe(0);
+  });
+
+  it("still stops when the last entry ends by itself with repeat off", () => {
+    const q = new PlayQueue(2, { startIndex: 1 });
+    expect(q.next(true)).toBeNull();
     expect(q.index, "and it did not move").toBe(1);
   });
 
