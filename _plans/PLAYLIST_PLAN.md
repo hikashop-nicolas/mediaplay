@@ -29,8 +29,8 @@ repeat one / stop at the end. Spans mediaplay (the queue, the UI, the parsers) a
   service. In-player next/previous buttons need none of that. Keep them in separate phases.
 - **The offline promise.** Playlist files routinely point at `http://` URLs. Omnitext's pitch
   is that nothing leaves the browser, and it already has a consent gate
-  (`src/remote-consent.ts`) for the few things that fetch. Remote entries are listed but not
-  fetched unless that gate says yes, and never silently.
+  (`src/remote-consent.ts`) for the few things that fetch. Remote entries are fetched only
+  after that gate says yes, once per playlist, and never silently. Decided: allowed behind it.
 - **Relative paths.** A playlist names `../Music/track.mp3`. A browser can only resolve that
   against a directory the user granted. Opened from a folder we hold, resolution is easy;
   opened on its own, the entries are names we cannot read, and the player has to say so and
@@ -128,7 +128,10 @@ writeM3u(entries): string
 Path resolution: entries are resolved against the folder the playlist came from, when we have
 it. An entry that escapes that folder, or an absolute path, cannot be read by a browser and is
 marked `missing`; `http(s)` entries are marked `remote`. Both show in the list, greyed, so the
-playlist is honest about what it holds.
+playlist is honest about what it holds. A `remote` entry becomes playable once the host
+grants consent for the playlist: the entry's `load` then hands the player the URL (streamed by
+the media element, not downloaded into memory), and the player shows that the source is
+online while it plays.
 
 ## Omnitext side
 
@@ -139,19 +142,22 @@ playlist is honest about what it holds.
 2. **A folder.** `showDirectoryPicker()` where it exists, `<input webkitdirectory>` elsewhere,
    and `webkitGetAsEntry()` for a dropped folder. Files are filtered to the media formats
    already in `formats/binary-viewers.ts` and sorted naturally, so `ep2` precedes `ep10`.
-   Subfolders: one level or all, worth deciding (see questions).
+   Decided: the folder's own files only, no descent into subfolders.
 3. **Playlist formats.** Register `.m3u`, `.m3u8`, `.pls`, `.xspf` as formats whose editor is
    the media player. Opened from a folder we hold, entries resolve and play. Opened alone, the
    player shows the list and a "choose the folder" button that grants the directory and
    resolves them.
-4. **The document model.** A queue is one Omnitext document: the filename shown is the playing
+4. **Saving a queue.** Decided: Omnitext writes the queue back as M3U8 (`writeM3u`), UTF-8,
+   relative paths against the folder when there is one, `#EXTINF` from the tags we have read.
+   Save As offers it for any queue; a queue opened from a playlist file saves back to it.
+5. **The document model.** A queue is one Omnitext document: the filename shown is the playing
    entry, the title bar carries the playlist name when there is one, Close closes the lot.
    Recent files records the folder or the playlist file, not each track.
-5. **Android.** `FileOpenerPlugin.pickDocument` gains `EXTRA_ALLOW_MULTIPLE`, plus a
+6. **Android.** `FileOpenerPlugin.pickDocument` gains `EXTRA_ALLOW_MULTIPLE`, plus a
    `pickFolder` on `ACTION_OPEN_DOCUMENT_TREE` that lists the tree's media children, and
-   intake for `ACTION_SEND_MULTIPLE`. Lock-screen controls and screen-off playback are a
-   separate piece of work (Media3 plugin plus a foreground service) and should not block the
-   rest.
+   intake for `ACTION_SEND_MULTIPLE`. Decided: in-app controls only. Lock-screen controls and
+   screen-off playback (Media3 plugin plus a foreground service) are out of this release, so
+   the F-Droid recipe gains no dependency.
 
 ## Steps
 
@@ -170,7 +176,8 @@ Each step ends green and shippable on its own.
    queue. Title and recents behaviour as above.
 5. **Omnitext: a folder.** The three routes, media filter, natural sort, subfolder rule.
 6. **Omnitext: playlist files.** The four formats registered, resolution against a known
-   folder, the "choose the folder" path, remote entries refused or consent-gated.
+   folder, the "choose the folder" path, remote entries behind the consent gate, and saving a
+   queue back as M3U8.
 7. **Android pickers.** Multi-select, folder tree, `ACTION_SEND_MULTIPLE`.
 8. **Media Session on the web.** Metadata and handlers; the Android native side stays a
    decision, not a step.
@@ -189,16 +196,14 @@ Each step ends green and shippable on its own.
 - Manual on the phone for the Android pickers, and on Safari and Firefox for the folder input,
   since those are exactly the routes the automated runs do not cover.
 
-## Open questions
+## Decisions
 
-1. Subfolders when a folder is opened: just its own files, or everything underneath? Deep
-   scanning a Movies folder can mean thousands of files.
-2. Should Omnitext be able to save a queue as a playlist file (`writeM3u` exists for it)? It
-   is an editor, so a playlist is arguably a document it should write back.
-3. Android lock-screen controls and playback with the screen off: worth a native Media3 plugin
-   (it is real work, and the F-Droid recipe gains a dependency), or do we leave Android with
-   in-app controls only?
-4. Remote entries in a playlist: refuse outright and keep the offline promise absolute, or
-   allow them behind the existing consent gate?
-5. Shuffle on video queues: asked for music only, which is what this plans. Fine to leave the
-   button hidden for video?
+Settled 2026-10-23.
+
+1. Folders: the folder's own files only. No subfolder descent in this release.
+2. Omnitext saves a queue as an M3U8 playlist file.
+3. Android: in-app controls only. No Media3 plugin, no foreground service, no new F-Droid
+   dependency. Revisit after release if people ask for screen-off playback.
+4. Remote entries in a playlist play behind the existing consent prompt, once per playlist.
+5. Shuffle is offered for all-audio queues only; the button is hidden for a queue holding any
+   video (assumed from the original ask, "for music only").
