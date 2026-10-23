@@ -9,12 +9,26 @@
 //
 // The subtitle helpers are re-exported so they can be used headlessly (no player).
 export {
-  createMediaPlayer,
   type MediaSource,
   type MediaPlayerOptions,
   type MediaPlayerHandle,
+  type PlayerChrome,
   type LibassAssets,
 } from "./player";
+export { createMediaPlayer, type QueueEntry, type PlaylistOptions, type PlaylistHandle } from "./playlist-player";
+export { PlayQueue, type RepeatMode } from "./queue";
+export {
+  parsePlaylist,
+  writeM3u,
+  playlistKind,
+  isRemote,
+  escapesFolder,
+  splitPath,
+  naturalCompare,
+  HlsManifestError,
+  type PlaylistEntry,
+  type PlaylistKind,
+} from "./playlist";
 export { setLocale, strings, type MediaStrings } from "./i18n";
 export { extractWaveformPeaks, decodeAudioToMono16k, type WaveformPeaks } from "./synced-audio";
 export {
@@ -28,3 +42,5 @@ export {
   type MkvSubtitleTrack,
   type MkvAudioTrack,
 } from "./mkv";
+export { entriesFromFiles, entriesFromPlaylist, entryFromFile, fileFinder, isMediaName, isAudioName } from "./sources";
+export { readDropped } from "./dropped";

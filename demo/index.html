@@ -19,10 +19,11 @@
     <div id="app">
       <header>
         <b>mediaplay</b>
-        <label>Open a file <input id="file" type="file" accept="audio/*,video/*,.mkv,.mka,.avi,.wmv,.flac,.opus" /></label>
-        <span style="color:#778;font-size:12px">or drop one anywhere · nothing leaves your browser</span>
+        <label>Open files <input id="file" type="file" multiple accept="audio/*,video/*,.mkv,.mka,.avi,.wmv,.flac,.opus,.m3u,.m3u8,.pls,.xspf" /></label>
+        <label>Open a folder <input id="folder" type="file" webkitdirectory multiple /></label>
+        <span style="color:#778;font-size:12px">or drop files, a folder or a playlist anywhere · nothing leaves your browser</span>
       </header>
-      <div id="player"><div id="drop">Drop an audio or video file here (MP4, WebM, MKV, MP3, FLAC, …)</div></div>
+      <div id="player"><div id="drop">Drop audio or video here: one file, several, a folder, or a playlist (M3U, PLS, XSPF)</div></div>
     </div>
     <script type="module" src="./demo.ts"></script>
   </body>

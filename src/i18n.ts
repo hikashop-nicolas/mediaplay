@@ -27,6 +27,19 @@ export type MediaStrings = {
   scopeBars: string;
   scopeOff: string;
   visualiser: string;
+  previousTrack: string;
+  nextTrack: string;
+  repeat: string;
+  repeatOff: string;
+  repeatAll: string;
+  repeatOne: string;
+  shuffle: string;
+  playlist: string;
+  removeFromPlaylist: string;
+  notReachable: string;
+  playsOnline: string;
+  skipped: string;
+  close: string;
 };
 
 const en: MediaStrings = {
@@ -49,6 +62,19 @@ const en: MediaStrings = {
   volume: "Volume",
   timeline: "Timeline",  speed: "Speed",  scope: "Oscilloscope",
   scopeBars: "Bars",  scopeOff: "No visualiser",    visualiser: "Visualiser",
+  previousTrack: "Previous",
+  nextTrack: "Next",
+  repeat: "Repeat",
+  repeatOff: "Repeat: off",
+  repeatAll: "Repeat: all",
+  repeatOne: "Repeat: one",
+  shuffle: "Shuffle",
+  playlist: "Playlist",
+  removeFromPlaylist: "Remove from the playlist",
+  notReachable: "Not found next to the playlist",
+  playsOnline: "Plays from the web",
+  skipped: "Could not play, skipping",
+  close: "Close",
 };
 
 const fr: MediaStrings = {
@@ -71,6 +97,19 @@ const fr: MediaStrings = {
   volume: "Volume",
   timeline: "Barre de progression",  speed: "Vitesse",  scope: "Oscilloscope",
   scopeBars: "Barres",  scopeOff: "Aucune visualisation",    visualiser: "Visualisation",
+  previousTrack: "Précédent",
+  nextTrack: "Suivant",
+  repeat: "Répéter",
+  repeatOff: "Répéter : non",
+  repeatAll: "Répéter : tout",
+  repeatOne: "Répéter : un seul",
+  shuffle: "Aléatoire",
+  playlist: "Liste de lecture",
+  removeFromPlaylist: "Retirer de la liste",
+  notReachable: "Introuvable à côté de la liste",
+  playsOnline: "Lu depuis le web",
+  skipped: "Lecture impossible, passage au suivant",
+  close: "Fermer",
 };
 
 const ja: MediaStrings = {
@@ -93,6 +132,19 @@ const ja: MediaStrings = {
   volume: "音量",
   timeline: "シークバー",  speed: "再生速度",  scope: "オシロスコープ",
   scopeBars: "バー",  scopeOff: "表示なし",    visualiser: "ビジュアライザー",
+  previousTrack: "前へ",
+  nextTrack: "次へ",
+  repeat: "リピート",
+  repeatOff: "リピート：オフ",
+  repeatAll: "リピート：全曲",
+  repeatOne: "リピート：1曲",
+  shuffle: "シャッフル",
+  playlist: "プレイリスト",
+  removeFromPlaylist: "プレイリストから削除",
+  notReachable: "プレイリストの隣に見つかりません",
+  playsOnline: "ウェブから再生",
+  skipped: "再生できないためスキップします",
+  close: "閉じる",
 };
 
 const es: MediaStrings = {
@@ -115,6 +167,19 @@ const es: MediaStrings = {
   volume: "Volumen",
   timeline: "Barra de progreso",  speed: "Velocidad",  scope: "Osciloscopio",
   scopeBars: "Barras",  scopeOff: "Sin visualización",    visualiser: "Visualizador",
+  previousTrack: "Anterior",
+  nextTrack: "Siguiente",
+  repeat: "Repetir",
+  repeatOff: "Repetir: no",
+  repeatAll: "Repetir: todo",
+  repeatOne: "Repetir: uno",
+  shuffle: "Aleatorio",
+  playlist: "Lista de reproducción",
+  removeFromPlaylist: "Quitar de la lista",
+  notReachable: "No se encuentra junto a la lista",
+  playsOnline: "Se reproduce desde la web",
+  skipped: "No se pudo reproducir, se salta",
+  close: "Cerrar",
 };
 
 const de: MediaStrings = {
@@ -137,6 +202,19 @@ const de: MediaStrings = {
   volume: "Lautstärke",
   timeline: "Zeitleiste",  speed: "Geschwindigkeit",  scope: "Oszilloskop",
   scopeBars: "Balken",  scopeOff: "Keine Visualisierung",    visualiser: "Visualisierung",
+  previousTrack: "Zurück",
+  nextTrack: "Weiter",
+  repeat: "Wiederholen",
+  repeatOff: "Wiederholen: aus",
+  repeatAll: "Wiederholen: alle",
+  repeatOne: "Wiederholen: einen",
+  shuffle: "Zufall",
+  playlist: "Wiedergabeliste",
+  removeFromPlaylist: "Aus der Liste entfernen",
+  notReachable: "Neben der Liste nicht gefunden",
+  playsOnline: "Wird aus dem Web abgespielt",
+  skipped: "Nicht abspielbar, wird übersprungen",
+  close: "Schließen",
 };
 
 const pt: MediaStrings = {
@@ -159,6 +237,19 @@ const pt: MediaStrings = {
   volume: "Volume",
   timeline: "Barra de progresso",  speed: "Velocidade",  scope: "Osciloscópio",
   scopeBars: "Barras",  scopeOff: "Sem visualização",    visualiser: "Visualizador",
+  previousTrack: "Anterior",
+  nextTrack: "Seguinte",
+  repeat: "Repetir",
+  repeatOff: "Repetir: não",
+  repeatAll: "Repetir: tudo",
+  repeatOne: "Repetir: um",
+  shuffle: "Aleatório",
+  playlist: "Lista de reprodução",
+  removeFromPlaylist: "Remover da lista",
+  notReachable: "Não encontrado junto à lista",
+  playsOnline: "Reproduzido a partir da web",
+  skipped: "Não foi possível reproduzir, a saltar",
+  close: "Fechar",
 };
 
 const ru: MediaStrings = {
@@ -181,6 +272,19 @@ const ru: MediaStrings = {
   volume: "Громкость",
   timeline: "Шкала времени",  speed: "Скорость",  scope: "Осциллограф",
   scopeBars: "Полосы",  scopeOff: "Без визуализации",    visualiser: "Визуализация",
+  previousTrack: "Назад",
+  nextTrack: "Далее",
+  repeat: "Повтор",
+  repeatOff: "Повтор: выкл.",
+  repeatAll: "Повтор: все",
+  repeatOne: "Повтор: один",
+  shuffle: "Вперемешку",
+  playlist: "Плейлист",
+  removeFromPlaylist: "Убрать из плейлиста",
+  notReachable: "Не найдено рядом с плейлистом",
+  playsOnline: "Воспроизводится из интернета",
+  skipped: "Не удалось воспроизвести, пропуск",
+  close: "Закрыть",
 };
 
 const zh: MediaStrings = {
@@ -203,6 +307,19 @@ const zh: MediaStrings = {
   volume: "音量",
   timeline: "进度条",  speed: "播放速度",  scope: "示波器",
   scopeBars: "频谱条",  scopeOff: "不显示",    visualiser: "可视化",
+  previousTrack: "上一个",
+  nextTrack: "下一个",
+  repeat: "循环",
+  repeatOff: "循环：关",
+  repeatAll: "循环：全部",
+  repeatOne: "循环：单曲",
+  shuffle: "随机",
+  playlist: "播放列表",
+  removeFromPlaylist: "从列表中移除",
+  notReachable: "在播放列表旁找不到",
+  playsOnline: "从网络播放",
+  skipped: "无法播放，已跳过",
+  close: "关闭",
 };
 
 const LOCALES: Record<string, MediaStrings> = { en, fr, ja, es, de, pt, ru, zh };

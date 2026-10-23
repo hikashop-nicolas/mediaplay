@@ -42,6 +42,9 @@ export interface MediaSource {
    * for callers that already have the data in memory; provide one or the other. */
   blob?: Blob;
   bytes?: Uint8Array;
+  /** A web address to stream instead, for a source that is not a file. The browser's own bar
+   * drives it, and there are no subtitle tracks, thumbnails or visualiser: those read the bytes. */
+  url?: string;
   /** MIME type; decides <audio> vs <video> and seeds the blob type. */
   mime?: string;
   /** File name (currently informational; reserved for future export naming). */
@@ -90,6 +93,21 @@ export interface MediaPlayerOptions {
    * prefers-reduced-motion; false forces it off, true forces the waveform. The user's own
    * choice in the player, including the frequency bars, is remembered over both. */
   scope?: boolean;
+  /** An element to mount into and keep, instead of making one: a queue swaps what plays inside
+   * it, so fullscreen survives from one track to the next. Emptied on destroy, never removed. */
+  host?: HTMLElement;
+  /** Called once the player's controls exist, with what a queue needs to add its own to them. */
+  chrome?: (parts: PlayerChrome) => void;
+}
+
+/** The pieces of a mounted player a host may add controls to. */
+export interface PlayerChrome {
+  wrap: HTMLElement;
+  stage: HTMLElement;
+  /** Our control bar. Null for audio, and when the browser's own bar is in use. */
+  bar: HTMLElement | null;
+  media: HTMLMediaElement;
+  isAudio: boolean;
 }
 
 export interface MediaPlayerHandle {
@@ -336,16 +354,21 @@ class MediaPlayer implements MediaPlayerHandle {
     const mime = source.mime ?? "";
     // Prefer the disk-backed Blob/File; only build one from bytes if that's all we were given.
     this.srcBlob = source.blob ?? (source.bytes && source.bytes.length ? new Blob([source.bytes as BlobPart], mime ? { type: mime } : undefined) : null);
-    const wrap = document.createElement("div");
+    const reused = !!this.opts.host;
+    const wrap = this.opts.host ?? document.createElement("div");
+    wrap.replaceChildren();
     wrap.className = "ot-media";
     wrap.tabIndex = 0;
+    // A reused wrap outlives this mount, so what listens on it has to let go with it.
+    const wrapListeners = new AbortController();
+    this.teardown.push(() => wrapListeners.abort());
     // A mouse click leaves focus on the button it pressed, where Space then activates that
     // button again instead of playing: clicking fullscreen and pressing Space left
     // fullscreen. A pointer click hands focus back to the player; keyboard activation
     // (detail 0) keeps it, so Tab and Space still work through the controls.
     wrap.addEventListener("click", (e) => {
       if (e.detail > 0 && e.target instanceof HTMLElement && e.target.closest("button")) wrap.focus({ preventScroll: true });
-    });
+    }, { signal: wrapListeners.signal });
     if (this.srcBlob) {
       const srcBlob = this.srcBlob;
       this.url = URL.createObjectURL(srcBlob);
@@ -1031,7 +1054,7 @@ class MediaPlayer implements MediaPlayerHandle {
               if (pops.every((p) => p.el.hidden)) wrap.classList.add("ot-media-idle");
             }, 2500);
         };
-        wrap.addEventListener("pointermove", poke);
+        wrap.addEventListener("pointermove", poke, { signal: wrapListeners.signal });
 
         // Double-click toggles fullscreen (like F); without this, Chrome's native
         // handler fullscreens the bare video where none of our overlays can live.
@@ -1377,15 +1400,43 @@ class MediaPlayer implements MediaPlayerHandle {
       if (bigPlay) stage.appendChild(bigPlay);
       wrap.appendChild(stage);
       wrap.appendChild(rateBadge);
+      this.opts.chrome?.({ wrap, stage, bar, media: m, isAudio });
+    } else if (source.url) {
+      this.mountRemote(wrap, source.url, mime);
     } else {
       const d = document.createElement("div");
       d.className = "ot-media-msg";
       d.textContent = S.mediaEmpty;
       wrap.appendChild(d);
     }
-    container.appendChild(wrap);
+    if (!reused) container.appendChild(wrap);
     this.wrap = wrap;
     wrap.focus();
+  }
+
+  /** A stream by address: the browser's bar and nothing that needs the bytes. */
+  private mountRemote(wrap: HTMLElement, url: string, mime: string): void {
+    const S = this.S;
+    const isAudio = mime.startsWith("audio/") || /\.(mp3|m4a|aac|flac|wav|oga|ogg|opus|weba)(\?|#|$)/i.test(url);
+    const m = document.createElement(isAudio ? "audio" : "video") as HTMLMediaElement;
+    this.media = m;
+    m.controls = true;
+    m.autoplay = !this.opts.embedded;
+    m.src = url;
+    wrap.setAttribute("aria-label", isAudio ? S.mediaKeysAudio : S.mediaKeys);
+    const stage = document.createElement("div");
+    stage.className = "ot-media-stage";
+    stage.appendChild(m);
+    m.addEventListener("error", () => {
+      wrap.textContent = "";
+      const d = document.createElement("div");
+      d.className = "ot-media-msg";
+      d.textContent = S.mediaUnsupported;
+      wrap.appendChild(d);
+      this.opts.onError?.(S.mediaUnsupported);
+    });
+    wrap.appendChild(stage);
+    this.opts.chrome?.({ wrap, stage, bar: null, media: m, isAudio });
   }
 
   /** The oscilloscope over an audio file's empty stage, with its own on/off button.
@@ -1577,7 +1628,8 @@ class MediaPlayer implements MediaPlayerHandle {
     this.subUrls = [];
     if (this.url) URL.revokeObjectURL(this.url);
     this.url = null;
-    this.wrap?.remove();
+    if (this.opts.host) this.wrap?.replaceChildren();
+    else this.wrap?.remove();
     this.wrap = null;
   }
 }
