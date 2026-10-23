@@ -1,0 +1,7 @@
+#EXTM3U
+#EXTINF:1,Band - First
+01 Tone 1.wav
+#EXTINF:1,Band - Second
+02 Tone 2.wav
+absent.wav
+03 Tone 3.wav
