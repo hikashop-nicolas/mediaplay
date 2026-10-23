@@ -89,6 +89,8 @@ function ensureStyles(): void {
       padding:6px 4px 0; color:#fff; font:13px system-ui, sans-serif; }
     .ot-pl-row .ot-pl-btn { min-width:44px; min-height:44px; }
     .ot-pl-now { flex:1 1 auto; min-width:0; padding:0 8px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+    .ot-pl-live { position:absolute; width:1px; height:1px; margin:-1px; padding:0; overflow:hidden; clip:rect(0 0 0 0);
+      white-space:nowrap; border:0; }
     .ot-pl-osd { position:absolute; top:12px; left:14px; z-index:2; max-width:70%; padding:6px 12px; border-radius:8px;
       background:rgba(20,20,24,0.85); color:#fff; font:600 13px system-ui, sans-serif; opacity:0; transition:opacity .3s;
       pointer-events:none; }
@@ -175,6 +177,11 @@ class PlaylistPlayer implements PlaylistHandle {
   private osdTimer = 0;
   private remoteAllowed = false;
   private panelOpen = false;
+  /** Set when a person opened the list, so focus moves into it once it is drawn. */
+  private focusPanel = false;
+  private listButton: HTMLButtonElement | null = null;
+  /** One announcer for the life of the queue: a live region that is rebuilt with its text in it is not read. */
+  private readonly live: HTMLElement;
   private destroyed = false;
   private repaint: (() => void)[] = [];
   private readonly onDocKey: (e: KeyboardEvent) => void;
@@ -195,6 +202,11 @@ class PlaylistPlayer implements PlaylistHandle {
     this.host = document.createElement("div");
     this.host.className = "ot-media";
     container.appendChild(this.host);
+    this.live = document.createElement("div");
+    this.live.className = "ot-pl-live";
+    this.live.setAttribute("role", "status");
+    this.live.setAttribute("aria-live", "polite");
+    container.appendChild(this.live);
     this.onDocKey = (e) => this.handleKey(e);
     document.addEventListener("keydown", this.onDocKey, true);
     if (this.entries.length) void this.play(this.queue.index);
@@ -281,6 +293,7 @@ class PlaylistPlayer implements PlaylistHandle {
     this.child?.destroy();
     this.child = null;
     this.host.remove();
+    this.live.remove();
   }
 
   // --- moving through the queue -------------------------------------------------------
@@ -435,6 +448,9 @@ class PlaylistPlayer implements PlaylistHandle {
     });
     this.repaint = [];
     const S = this.S;
+    // Screen readers hear which entry started; the picture's title card is silent to them.
+    const here = this.entries[this.queue.index];
+    this.live.textContent = here && this.entries.length > 1 ? `${this.queue.index + 1} / ${this.entries.length}: ${here.artist ? `${here.artist} - ` : ""}${here.title}` : "";
 
     const button = (icon: string, label: string, onClick: () => void): HTMLButtonElement => {
       const b = document.createElement("button");
@@ -473,9 +489,11 @@ class PlaylistPlayer implements PlaylistHandle {
     const next = button(ICONS.next, S.nextTrack, () => this.next());
     const list = button(ICONS.list, S.playlist, () => {
       this.panelOpen = !this.panelOpen;
+      this.focusPanel = this.panelOpen;
       this.paint();
     });
     list.setAttribute("aria-haspopup", "dialog");
+    this.listButton = list;
     const shuffle = makeShuffle();
     const repeat = makeRepeat();
     for (const b of [shuffle, repeat]) b.classList.add("ot-pl-wide");
@@ -531,6 +549,13 @@ class PlaylistPlayer implements PlaylistHandle {
     this.osdTimer = window.setTimeout(() => osd.classList.remove("show"), 2600);
   }
 
+  /** Close the list and put the keyboard back on the button that opened it. */
+  private closePanel(): void {
+    this.panelOpen = false;
+    this.paint();
+    (this.listButton && !this.listButton.hidden ? this.listButton : this.host).focus();
+  }
+
   private buildPanel(shuffle: HTMLButtonElement, repeat: HTMLButtonElement): { root: HTMLElement; refresh: () => void } {
     const S = this.S;
     const root = document.createElement("div");
@@ -547,10 +572,7 @@ class PlaylistPlayer implements PlaylistHandle {
     close.textContent = "×";
     close.title = S.close;
     close.setAttribute("aria-label", S.close);
-    close.addEventListener("click", () => {
-      this.panelOpen = false;
-      this.paint();
-    });
+    close.addEventListener("click", () => this.closePanel());
     head.append(title, shuffle, repeat, close);
     const ol = document.createElement("ol");
     ol.className = "ot-pl-list";
@@ -562,9 +584,7 @@ class PlaylistPlayer implements PlaylistHandle {
     root.append(head, ol, find);
     root.addEventListener("keydown", (e) => {
       if (e.key === "Escape") {
-        this.panelOpen = false;
-        this.paint();
-        this.host.focus();
+        this.closePanel();
         e.stopPropagation();
       }
     });
@@ -613,7 +633,12 @@ class PlaylistPlayer implements PlaylistHandle {
         li.append(pick, del);
         ol.appendChild(li);
       });
-      ol.querySelector('[aria-current="true"]')?.scrollIntoView?.({ block: "nearest" });
+      const current = ol.querySelector<HTMLElement>('[aria-current="true"]');
+      current?.scrollIntoView?.({ block: "nearest" });
+      if (this.focusPanel) {
+        this.focusPanel = false;
+        (current?.querySelector<HTMLElement>(".ot-pl-pick") ?? root.querySelector<HTMLElement>(".ot-pl-btn"))?.focus();
+      }
     };
     return { root, refresh };
   }

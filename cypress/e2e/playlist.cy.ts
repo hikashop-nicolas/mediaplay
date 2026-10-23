@@ -98,6 +98,20 @@ describe("a queue of audio files", () => {
     until((h) => expect(h.getIndex(), "the playing file is now the second").to.equal(1));
   });
 
+  it("tells a screen reader which file started", () => {
+    cy.get(".ot-pl-live").should("have.attr", "aria-live", "polite").and("contain.text", "1 / 3");
+    cy.get('.ot-pl-btn[aria-label="Next"]').click();
+    cy.get(".ot-pl-live").should("contain.text", "2 / 3");
+  });
+
+  it("moves focus into the list when it opens, and back to its button when it closes", () => {
+    cy.get('.ot-pl-btn[aria-label="Playlist"]').click();
+    cy.focused().should("have.class", "ot-pl-pick");
+    cy.focused().type("{esc}");
+    cy.focused().should("have.attr", "aria-label", "Playlist");
+    cy.get(".ot-pl-panel").should("not.be.visible");
+  });
+
   it("remembers shuffle and repeat for the next time", () => {
     cy.get('.ot-pl-btn[aria-label="Shuffle"]').first().click();
     cy.get('.ot-pl-btn[aria-label="Repeat: off"]').first().click();
