@@ -94,7 +94,7 @@ function ensureStyles(): void {
       pointer-events:none; }
     .ot-pl-osd.show { opacity:1; }
     .ot-pl-panel { position:absolute; top:0; right:0; bottom:0; z-index:3; box-sizing:border-box; width:min(360px, 100%);
-      display:flex; flex-direction:column; background:rgba(16,16,20,0.97); color:#fff; font:13px system-ui, sans-serif;
+      display:flex; flex-direction:column; background:#101014; color:#fff; font:13px system-ui, sans-serif;
       border-left:1px solid rgba(255,255,255,0.14); }
     .ot-pl-panel[hidden] { display:none; }
     .ot-pl-head { display:flex; align-items:center; gap:4px; padding:6px 8px 6px 12px;
