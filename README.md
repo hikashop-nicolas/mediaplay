@@ -65,6 +65,49 @@ handle.destroy();
   speed, `C` subtitles, `←`/`→` seek, `↑`/`↓` volume, `Home`/`End` jump. Shortcuts keep
   working wherever focus sits in the player.
 
+- **Queues and playlists.** Hand it several files, a folder, or a playlist file and it plays
+  them one after another: next and previous (`N` / `P`, the bar, or the headset keys where the
+  browser has a media session), repeat off / all / one, shuffle for a queue of music, and a
+  list to jump around in, remove from, and see titles read from the files' tags. Fullscreen
+  survives the jump to the next file, and only the file that is playing is ever open.
+  M3U, M3U8, PLS and XSPF are read; a queue can be written back as M3U8. See
+  [Playing several files](#playing-several-files).
+
+## Playing several files
+
+```ts
+import { createMediaPlayer, entriesFromFiles, entriesFromPlaylist, fileFinder, parsePlaylist, readDropped } from "mediaplay";
+
+// Files, or a dropped folder: the media among them, in the order a person counts.
+const files = await readDropped(event.dataTransfer);
+const player = createMediaPlayer(el, entriesFromFiles(files), { repeat: "all" });
+
+// A playlist file, with the files its lines name picked alongside it.
+const items = parsePlaylist(await playlist.text(), playlist.name);
+createMediaPlayer(el, entriesFromPlaylist(items, fileFinder(files, "Album/mix.m3u8")), {
+  allowRemote: async () => confirm("This playlist plays from the web. Allow it?"),
+  onChooseFolder: () => pickAFolderAndBuildTheEntriesAgain(),
+});
+
+player.next(); player.previous(); player.goTo(3);
+player.setRepeat("one"); player.setShuffle(true); // shuffle is for all-audio queues only
+```
+
+An entry is lazy: `{ title, load() }`. `load()` returns the media when the entry's turn comes,
+so a folder of hundreds costs nothing until played, and a host whose files cannot be read in
+place (Android, where each is copied out of its provider) pays for one file at a time. A
+playlist line with no file to go with it stays in the list, marked missing; a line on the web
+is marked remote and plays only if `allowRemote` says yes, once per queue. A track that will
+not play is named and passed over, unless every one has failed.
+
+`PlaylistHandle` adds `next`, `previous`, `goTo`, `getQueue`, `getIndex`, `setRepeat`,
+`setShuffle`, `add` and `remove` to the usual handle, and the options add `onTrackChange`,
+`onQueueChange`, `allowRemote`, `onMissing` and `onChooseFolder`. Repeat and shuffle are
+remembered between sessions. `parsePlaylist`, `writeM3u`, `PlayQueue` and the file helpers
+work without a player. A `.m3u8` that is really an HLS stream is refused with
+`HlsManifestError` instead of becoming a queue of segments. Folders are read one level deep,
+by design.
+
 ## Supported formats
 
 **Containers.** Direct playback covers whatever the browser's `<video>` / `<audio>`
