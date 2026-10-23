@@ -40,6 +40,7 @@ export type MediaStrings = {
   playsOnline: string;
   skipped: string;
   close: string;
+  chooseFolder: string;
 };
 
 const en: MediaStrings = {
@@ -75,6 +76,7 @@ const en: MediaStrings = {
   playsOnline: "Plays from the web",
   skipped: "Could not play, skipping",
   close: "Close",
+  chooseFolder: "Choose the folder with the files…",
 };
 
 const fr: MediaStrings = {
@@ -110,6 +112,7 @@ const fr: MediaStrings = {
   playsOnline: "Lu depuis le web",
   skipped: "Lecture impossible, passage au suivant",
   close: "Fermer",
+  chooseFolder: "Choisir le dossier des fichiers…",
 };
 
 const ja: MediaStrings = {
@@ -145,6 +148,7 @@ const ja: MediaStrings = {
   playsOnline: "ウェブから再生",
   skipped: "再生できないためスキップします",
   close: "閉じる",
+  chooseFolder: "ファイルのあるフォルダを選ぶ…",
 };
 
 const es: MediaStrings = {
@@ -180,6 +184,7 @@ const es: MediaStrings = {
   playsOnline: "Se reproduce desde la web",
   skipped: "No se pudo reproducir, se salta",
   close: "Cerrar",
+  chooseFolder: "Elegir la carpeta con los archivos…",
 };
 
 const de: MediaStrings = {
@@ -215,6 +220,7 @@ const de: MediaStrings = {
   playsOnline: "Wird aus dem Web abgespielt",
   skipped: "Nicht abspielbar, wird übersprungen",
   close: "Schließen",
+  chooseFolder: "Ordner mit den Dateien wählen…",
 };
 
 const pt: MediaStrings = {
@@ -250,6 +256,7 @@ const pt: MediaStrings = {
   playsOnline: "Reproduzido a partir da web",
   skipped: "Não foi possível reproduzir, a saltar",
   close: "Fechar",
+  chooseFolder: "Escolher a pasta com os ficheiros…",
 };
 
 const ru: MediaStrings = {
@@ -285,6 +292,7 @@ const ru: MediaStrings = {
   playsOnline: "Воспроизводится из интернета",
   skipped: "Не удалось воспроизвести, пропуск",
   close: "Закрыть",
+  chooseFolder: "Выбрать папку с файлами…",
 };
 
 const zh: MediaStrings = {
@@ -320,6 +328,7 @@ const zh: MediaStrings = {
   playsOnline: "从网络播放",
   skipped: "无法播放，已跳过",
   close: "关闭",
+  chooseFolder: "选择文件所在文件夹…",
 };
 
 const LOCALES: Record<string, MediaStrings> = { en, fr, ja, es, de, pt, ru, zh };

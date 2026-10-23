@@ -36,6 +36,9 @@ export interface PlaylistOptions extends MediaPlayerOptions {
   allowRemote?: (entry: QueueEntry) => Promise<boolean>;
   /** A person asked for an entry we could not find, so the host can offer to look for it. */
   onMissing?: (entry: QueueEntry, index: number) => void;
+  /** The list offers a button to look for the missing files when the host can: it picks a folder
+   * and builds the entries again. */
+  onChooseFolder?: () => void;
 }
 
 export interface PlaylistHandle extends MediaPlayerHandle {
@@ -109,6 +112,9 @@ function ensureStyles(): void {
     .ot-pl-sub { color:#a8a8b3; font-size:12px; }
     .ot-pl-time { flex:none; color:#a8a8b3; font-variant-numeric:tabular-nums; }
     .ot-pl-item.off .ot-pl-title { color:#a8a8b3; font-style:italic; }
+    .ot-pl-find { margin:10px 12px; min-height:44px; padding:0 12px; border-radius:8px; cursor:pointer; color:#fff;
+      background:rgba(60,60,70,0.9); border:1px solid rgba(255,255,255,0.25); font:600 13px system-ui, sans-serif; }
+    .ot-pl-find:focus-visible { outline:2px solid #fff; outline-offset:2px; }
     .ot-pl-del { flex:none; width:44px; min-height:44px; background:none; border:0; color:#a8a8b3; font-size:18px; cursor:pointer; }
     @media (prefers-reduced-motion: reduce) { .ot-pl-osd { transition:none; } }
   `;
@@ -182,6 +188,8 @@ class PlaylistPlayer implements PlaylistHandle {
       repeat: repeat === "all" || repeat === "one" ? repeat : "off",
       shuffle: shuffle && this.allAudio(),
     });
+    // A playlist opened with none of its files has nothing to play yet: the list is the page.
+    this.panelOpen = this.entries.length > 0 && this.entries.every((e) => e.unavailable === "missing");
     this.host = document.createElement("div");
     this.host.className = "ot-media";
     container.appendChild(this.host);
@@ -544,7 +552,12 @@ class PlaylistPlayer implements PlaylistHandle {
     head.append(title, shuffle, repeat, close);
     const ol = document.createElement("ol");
     ol.className = "ot-pl-list";
-    root.append(head, ol);
+    const find = document.createElement("button");
+    find.type = "button";
+    find.className = "ot-pl-find";
+    find.textContent = S.chooseFolder;
+    find.addEventListener("click", () => this.opts.onChooseFolder?.());
+    root.append(head, ol, find);
     root.addEventListener("keydown", (e) => {
       if (e.key === "Escape") {
         this.panelOpen = false;
@@ -555,6 +568,7 @@ class PlaylistPlayer implements PlaylistHandle {
     });
     const refresh = () => {
       if (root.hidden) return;
+      find.hidden = !this.opts.onChooseFolder || !this.entries.some((e) => e.unavailable === "missing");
       ol.textContent = "";
       this.entries.forEach((entry, i) => {
         const li = document.createElement("li");
