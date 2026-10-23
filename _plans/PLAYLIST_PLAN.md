@@ -159,6 +159,15 @@ online while it plays.
    screen-off playback (Media3 plugin plus a foreground service) are out of this release, so
    the F-Droid recipe gains no dependency.
 
+## Status
+
+Done 2026-10-23, in mediaplay and Omnitext: steps 1 to 10, checked in node (queue, parsers,
+sources), in a real browser (cypress, 12 tests) and headless Chrome against Omnitext, and on the
+phone for the multi-file picker, the folder picker and a playlist file. Not exercised: a
+multiple share (SEND_MULTIPLE), which adb cannot send; the code is in and compiles. One change
+from the plan: the Android pickers describe documents and stage each when it plays, because the
+plugin copies a file out of its provider and a queue must not copy fifty.
+
 ## Steps
 
 Each step ends green and shippable on its own.
