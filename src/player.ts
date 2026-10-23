@@ -576,7 +576,11 @@ class MediaPlayer implements MediaPlayerHandle {
       // shows the focused button's title tooltip over the video). Pull focus into the
       // player once ready, with retries because the restore can land after us.
       const pullFocus = () => {
-        if (wrap.isConnected && !wrap.contains(document.activeElement)) wrap.focus();
+        if (!wrap.isConnected || wrap.contains(document.activeElement)) return;
+        // Someone typing or answering a dialog has the focus on purpose: a track starting
+        // in a queue must not take it from the command palette.
+        if (document.activeElement?.closest("input, textarea, select, [contenteditable], [role=dialog]")) return;
+        wrap.focus();
       };
       m.addEventListener("loadeddata", pullFocus, { once: true });
       window.setTimeout(pullFocus, 600);
