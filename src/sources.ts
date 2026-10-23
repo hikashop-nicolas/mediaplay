@@ -35,19 +35,35 @@ export function isAudioName(name: string): boolean {
   return AUDIO_NAME.test(name);
 }
 
+/**
+ * What a queue entry is made from: a File, or anything that can produce one when its turn comes.
+ * The second is for a host whose files are not readable in place, like Android, where each is
+ * copied out of the document provider only when it plays.
+ */
+export interface FileSource {
+  name: string;
+  type?: string;
+  /** Where it sat inside a picked folder. */
+  webkitRelativePath?: string;
+  /** Produces the bytes when asked. A File needs none: it is its own. */
+  load?: () => Promise<Blob>;
+}
+
+const blobOf = async (f: FileSource): Promise<Blob> => (f.load ? f.load() : (f as unknown as Blob));
+
 /** Where a file sits relative to what was picked: its path inside a folder, else just its name. */
-function relativePath(file: File): string {
-  return (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
+function relativePath(file: FileSource): string {
+  return file.webkitRelativePath || file.name;
 }
 
 /** The entry for one file: lazy, and honest about whether it is sound. */
-export function entryFromFile(file: File): QueueEntry {
+export function entryFromFile(file: FileSource): QueueEntry {
   const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
   return {
     title: file.name,
     source: relativePath(file),
     audio: isAudioName(file.name),
-    load: async () => ({ blob: file, mime: file.type || EXT_MIME[ext] || "", filename: file.name }),
+    load: async () => ({ blob: await blobOf(file), mime: file.type || EXT_MIME[ext] || "", filename: file.name }),
   };
 }
 
@@ -56,12 +72,12 @@ export function entryFromFile(file: File): QueueEntry {
  * that is not media (a cover image, a playlist, a text file) is left out, which is what makes
  * dropping a whole album folder work.
  */
-export function sortMedia(files: Iterable<File>): File[] {
+export function sortMedia<T extends FileSource>(files: Iterable<T>): T[] {
   return [...files].filter((f) => isMediaName(f.name)).sort((a, b) => naturalCompare(relativePath(a), relativePath(b)));
 }
 
 /** The queue entries for those files, in that order. */
-export function entriesFromFiles(files: Iterable<File>): QueueEntry[] {
+export function entriesFromFiles(files: Iterable<FileSource>): QueueEntry[] {
   return sortMedia(files).map(entryFromFile);
 }
 
@@ -72,10 +88,10 @@ export function entriesFromFiles(files: Iterable<File>): QueueEntry[] {
  * written on another machine names C:\Music\a.mp3, and the album folder it came from is
  * what the person picked.
  */
-export function fileFinder(files: readonly File[], playlistPath = ""): (path: string) => File | undefined {
+export function fileFinder<T extends FileSource>(files: readonly T[], playlistPath = ""): (path: string) => T | undefined {
   const base = splitPath(playlistPath).slice(0, -1);
-  const byPath = new Map<string, File>();
-  const byName = new Map<string, File | null>();
+  const byPath = new Map<string, T>();
+  const byName = new Map<string, T | null>();
   for (const f of files) {
     byPath.set(splitPath(relativePath(f)).join("/").toLowerCase(), f);
     const key = f.name.toLowerCase();
@@ -99,7 +115,7 @@ export function fileFinder(files: readonly File[], playlistPath = ""): (path: st
  */
 export function entriesFromPlaylist(
   items: readonly PlaylistEntry[],
-  find: (path: string) => File | undefined,
+  find: (path: string) => FileSource | undefined,
 ): QueueEntry[] {
   return items.map((item) => {
     const label = item.title ?? item.path.split(/[\\/]/).pop() ?? item.path;

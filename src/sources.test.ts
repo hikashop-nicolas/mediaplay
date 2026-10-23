@@ -89,6 +89,31 @@ describe("what a playlist points at", () => {
   });
 });
 
+describe("files that are produced when their turn comes", () => {
+  it("gives the player whatever the source loads, and only then", async () => {
+    let loads = 0;
+    const lazy = {
+      name: "song.flac",
+      type: "audio/flac",
+      load: async () => {
+        loads++;
+        return new Blob(["x"]);
+      },
+    };
+    const [entry] = entriesFromFiles([lazy]);
+    expect(loads, "nothing read while the queue is built").toBe(0);
+    const source = await entry!.load();
+    expect(loads).toBe(1);
+    expect(source).toMatchObject({ mime: "audio/flac", filename: "song.flac" });
+    expect(source.blob).toBeInstanceOf(Blob);
+  });
+
+  it("finds a playlist's lines among such sources", () => {
+    const find = fileFinder([{ name: "a.mp3" }, { name: "b.mp3" }]);
+    expect(find("sub/b.mp3")?.name).toBe("b.mp3");
+  });
+});
+
 describe("saving a queue as a playlist", () => {
   it("drops the picked folder's name so the playlist travels with the folder", () => {
     const entries = entriesFromFiles([file("02 Two.mp3", "Album"), file("01 One.mp3", "Album")]);
