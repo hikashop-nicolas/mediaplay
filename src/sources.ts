@@ -55,11 +55,13 @@ export function entryFromFile(file: File): QueueEntry {
  * that is not media (a cover image, a playlist, a text file) is left out, which is what makes
  * dropping a whole album folder work.
  */
+export function sortMedia(files: Iterable<File>): File[] {
+  return [...files].filter((f) => isMediaName(f.name)).sort((a, b) => naturalCompare(relativePath(a), relativePath(b)));
+}
+
+/** The queue entries for those files, in that order. */
 export function entriesFromFiles(files: Iterable<File>): QueueEntry[] {
-  return [...files]
-    .filter((f) => isMediaName(f.name))
-    .sort((a, b) => naturalCompare(relativePath(a), relativePath(b)))
-    .map(entryFromFile);
+  return sortMedia(files).map(entryFromFile);
 }
 
 /**
