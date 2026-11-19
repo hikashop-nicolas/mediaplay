@@ -231,6 +231,8 @@ function ensureStyles(): void {
       z-index:3; padding:10px 6px; background:rgba(24,24,30,0.97);
       border:1px solid rgba(255,255,255,0.2); border-radius:10px; }
     .ot-media-volpop[hidden] { display:none; }
+    /* Bridges the gap down to the button, so the pointer stays "inside" on its way up. */
+    .ot-media-volpop::after { content:""; position:absolute; left:-10px; right:-10px; top:100%; height:14px; }
     /* Vertical slider: writing-mode is the modern way, the appearance is the old fallback. */
     .ot-media-vol { writing-mode:vertical-lr; direction:rtl; -webkit-appearance:slider-vertical;
       width:20px; height:96px; accent-color:#fff; }
@@ -420,7 +422,21 @@ class MediaPlayer implements MediaPlayerHandle {
         }, ms);
       };
       const flashSeek = () => flashBadge(Number.isFinite(m.duration) ? `${fmtClock(m.currentTime)} / ${fmtClock(m.duration)}` : fmtClock(m.currentTime));
-      const flashVolume = () => flashBadge(m.muted ? "🔇" : `🔊 ${Math.round(m.volume * 100)}%`);
+      const flashVolume = () => flashBadge(m.muted || !m.volume ? "🔇" : `🔊 ${Math.round(m.volume * 100)}%`);
+      // Mute is a toggle that gives back the level it had: unmuting from 0 restores it.
+      let lastVolume = m.volume >= 0.05 ? m.volume : 1;
+      m.addEventListener("volumechange", () => {
+        if (m.volume >= 0.05) lastVolume = m.volume;
+      });
+      const toggleMute = (flash: boolean) => {
+        // An autoplay force-mute is not the user's: lift it first, so this toggles the real state.
+        this.decodedAudio?.releaseForceMute();
+        if (m.muted || !m.volume) {
+          m.muted = false;
+          if (!m.volume) m.volume = lastVolume;
+        } else m.muted = true;
+        if (flash) flashVolume();
+      };
       // Playback speed: S slower / D faster, remembered across files (like a player).
       const setRate = (rate: number, show: boolean) => {
         const r = Math.min(4, Math.max(0.2, Math.round(rate * 10) / 10));
@@ -520,8 +536,7 @@ class MediaPlayer implements MediaPlayerHandle {
             toggleFullscreen();
             break;
           case "m":
-            m.muted = !m.muted;
-            flashVolume();
+            toggleMute(true);
             break;
           case "s":
             setRate(m.playbackRate - RATE_STEP, true);
@@ -541,6 +556,7 @@ class MediaPlayer implements MediaPlayerHandle {
             flashSeek();
             break;
           case "ArrowUp":
+            this.decodedAudio?.releaseForceMute();
             m.volume = Math.min(1, m.volume + VOLUME_STEP);
             m.muted = false;
             flashVolume();
@@ -618,7 +634,7 @@ class MediaPlayer implements MediaPlayerHandle {
         clock.className = "ot-media-clock";
         // Volume: just the icon in the bar, with the slider in a popup above it, so the
         // timeline keeps the width a phone needs. Mouse: hover opens it, click mutes.
-        // Touch: the tap opens it, since there is no hover to open it with.
+        // Touch: the tap opens it, since there is no hover to open it with. Keyboard: focus opens it.
         const volWrap = document.createElement("div");
         volWrap.className = "ot-media-volwrap";
         const muteBtn = document.createElement("button");
@@ -635,35 +651,84 @@ class MediaPlayer implements MediaPlayerHandle {
         vol.step = "0.01";
         vol.setAttribute("aria-label", S.volume);
         vol.addEventListener("input", () => {
+          this.decodedAudio?.releaseForceMute();
           m.volume = Number(vol.value);
           m.muted = Number(vol.value) === 0;
         });
         volPop.appendChild(vol);
         volWrap.append(muteBtn, volPop);
         let volTouch = false;
-        popClosers.push(() => (volPop.hidden = true));
+        let volHover = false;
+        let volDrag = false;
+        let volCloseTimer = 0;
+        const openVol = () => {
+          window.clearTimeout(volCloseTimer);
+          if (volPop.hidden) {
+            closeAllPops();
+            volPop.hidden = false;
+          }
+        };
+        const closeVol = () => {
+          window.clearTimeout(volCloseTimer);
+          volPop.hidden = true;
+        };
+        // A short grace period, so a pointer on its way to the slider doesn't close it.
+        const closeVolSoon = () => {
+          window.clearTimeout(volCloseTimer);
+          volCloseTimer = window.setTimeout(() => {
+            if (!volHover && !volDrag && !volWrap.querySelector(":focus-visible")) closeVol();
+          }, 350);
+        };
+        this.teardown.push(() => window.clearTimeout(volCloseTimer));
+        popClosers.push(closeVol);
         const closeVolOutside = (e: MouseEvent) => {
-          if (!volWrap.contains(e.target as Node)) volPop.hidden = true;
+          if (!volWrap.contains(e.target as Node)) closeVol();
         };
         document.addEventListener("click", closeVolOutside);
-        this.teardown.push(() => document.removeEventListener("click", closeVolOutside));
+        const endVolDrag = () => {
+          if (!volDrag) return;
+          volDrag = false;
+          if (!volHover) closeVolSoon();
+        };
+        document.addEventListener("pointerup", endVolDrag);
+        document.addEventListener("pointercancel", endVolDrag);
+        this.teardown.push(() => {
+          document.removeEventListener("click", closeVolOutside);
+          document.removeEventListener("pointerup", endVolDrag);
+          document.removeEventListener("pointercancel", endVolDrag);
+        });
+        vol.addEventListener("pointerdown", () => (volDrag = true));
         muteBtn.addEventListener("pointerdown", (e) => (volTouch = e.pointerType !== "mouse"));
-        muteBtn.addEventListener("pointerenter", (e) => {
+        volWrap.addEventListener("pointerenter", (e) => {
           if (e.pointerType !== "mouse") return;
-          closeAllPops();
-          volPop.hidden = false;
+          volHover = true;
+          openVol();
         });
         volWrap.addEventListener("pointerleave", (e) => {
-          if ((e as PointerEvent).pointerType === "mouse") volPop.hidden = true;
+          if (e.pointerType !== "mouse") return;
+          volHover = false;
+          if (!volDrag) closeVolSoon();
+        });
+        volWrap.addEventListener("focusin", (e) => {
+          if ((e.target as HTMLElement).matches?.(":focus-visible")) openVol(); // keyboard focus only
+        });
+        volWrap.addEventListener("focusout", (e) => {
+          if (!volWrap.contains(e.relatedTarget as Node | null)) closeVolSoon();
+        });
+        volPop.addEventListener("keydown", (e) => {
+          if (e.key !== "Escape") return;
+          e.stopPropagation();
+          closeVol();
+          muteBtn.focus();
         });
         muteBtn.addEventListener("click", () => {
           if (!volTouch) {
-            m.muted = !m.muted;
+            toggleMute(false);
             return;
           }
-          const open = volPop.hidden;
-          closeAllPops();
-          volPop.hidden = !open;
+          volTouch = false;
+          if (volPop.hidden) openVol();
+          else closeVol();
         });
         el.append(playBtn, timeline, clock, volWrap, ...extras);
 

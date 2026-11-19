@@ -24,6 +24,9 @@ export interface SyncedAudioHandle {
   /** True while the video element is muted only so it could autoplay: the sound is coming
    * from here, so a player's mute button must not show it as muted. */
   forceMuted(): boolean;
+  /** Lift the autoplay force-mute now (a mute control is being used), so a toggle acts on
+   * the real state instead of being undone by the gesture handler right after. */
+  releaseForceMute(): void;
   /** The node the sound passes through on its way out, for a visualizer. */
   analyser(): AnalyserNode;
   destroy(): void;
@@ -118,11 +121,7 @@ class SyncedAudio {
     // track is silent anyway), after which muted/volume are honored natively.
     const tryResume = () => {
       if (this.disposed) return removeGesture();
-      if (!this.muteSynced) {
-        this.muteSynced = true;
-        this.video.muted = false;
-        this.applyVolume();
-      }
+      this.releaseForceMute();
       // Prime the context inside this gesture so a later resume() (on play) is allowed,
       // but if the video isn't playing yet keep it idle, so audio doesn't run ahead of a
       // paused video (embedded hosts open paused). Stop listening only once it's running
@@ -331,6 +330,13 @@ class SyncedAudio {
     return !this.muteSynced;
   }
 
+  releaseForceMute(): void {
+    if (this.muteSynced) return;
+    this.muteSynced = true;
+    this.video.muted = false;
+    this.applyVolume();
+  }
+
   getAnalyser(): AnalyserNode {
     return this.analyser;
   }
@@ -516,6 +522,7 @@ export async function playSyncedAudio(
     engine.start();
     return {
       forceMuted: () => engine.forceMuted(),
+      releaseForceMute: () => engine.releaseForceMute(),
       analyser: () => engine.getAnalyser(),
       destroy: () => {
         engine.destroy();
