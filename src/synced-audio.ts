@@ -8,7 +8,7 @@
 // offset introduced by a transition is absorbed within a few (32 ms) buffers.
 
 import { Input, ALL_FORMATS, BufferSource, BlobSource, AudioBufferSink, type InputAudioTrack } from "mediabunny";
-import { setLibavBase, registerAc3Decoder, createDirectAudioDecoder, MKV_LIBAV_CODECS, type DirectFrame } from "./libav-decoder";
+import { setLibavBase, registerAc3Decoder, preloadLibav, createDirectAudioDecoder, MKV_LIBAV_CODECS, type DirectFrame } from "./libav-decoder";
 import { readAudioPackets, readAudioPacketsFromBlob, extractMkvInfo, type MkvInfo } from "./mkv";
 import { TimeStretcher } from "./time-stretch";
 
@@ -180,7 +180,7 @@ class SyncedAudio {
     // paused), suspend it so decoded audio doesn't play on its own; the play handler
     // resumes it when the video actually starts.
     if (this.video.paused) void this.ctx.suspend();
-    this.restart();
+    void this.launch(); // no debounce here: nothing to coalesce yet, and it delays the first sound
   }
 
   /** Stop the current run and (debounced) start a fresh one at the live position. A
@@ -489,6 +489,7 @@ export async function playSyncedAudio(
 ): Promise<SyncedAudioHandle | "undecodable" | null> {
   setLibavBase(base);
   registerAc3Decoder();
+  preloadLibav(); // fetch + compile the decoder while the container is probed
   // Tear down any previous stream up front, so two concurrent starts can't both run.
   stopCurrentEngine();
   try {

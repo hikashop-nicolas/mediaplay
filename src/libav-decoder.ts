@@ -42,6 +42,11 @@ function loadLibav(): Promise<any> {
   return libavPromise as Promise<any>;
 }
 
+/** Start loading the decoder now, so the first decode doesn't wait for it. */
+export function preloadLibav(): void {
+  loadLibav().catch(() => undefined);
+}
+
 /** Import the libav loader module, retrying past a poisoned module-map entry. The browser
  *  caches a failed dynamic import for the exact URL for the page's lifetime, so a plain
  *  retry returns the same rejection; a unique query string bypasses the cached failure. */

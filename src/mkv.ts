@@ -281,17 +281,52 @@ export function subtitleFileToVtt(name: string, bytes: Uint8Array): string {
   return srtToVtt(text);
 }
 
-export function extractMkvInfo(bytes: Uint8Array): MkvInfo {
-  const empty: MkvInfo = { subtitles: [], audio: [], fonts: [], clusters: [], timestampScale: 1_000_000 };
-  if (bytes.length < 8 || bytes[0] !== 0x1a || bytes[1] !== 0x45 || bytes[2] !== 0xdf || bytes[3] !== 0xa3) return empty;
-  const r = new Reader(bytes);
-  const tracks = new Map<number, TrackInfo>();
-  const audio: MkvAudioTrack[] = [];
-  const fonts: MkvFont[] = [];
-  const clusters: MkvClusterRef[] = [];
-  let scale = 1_000_000; // ns per tick (default = 1 ms)
+/** Stateful Matroska walker: the parse steps of extractMkvInfo, fed either the whole file or
+ * one element's bytes at a time (Blob scanning). `base` maps slice offsets to file offsets. */
+class MkvWalker {
+  readonly tracks = new Map<number, TrackInfo>();
+  readonly audio: MkvAudioTrack[] = [];
+  readonly fonts: MkvFont[] = [];
+  readonly clusters: MkvClusterRef[] = [];
+  scale = 1_000_000; // ns per tick (default = 1 ms)
+  r: Reader = new Reader(new Uint8Array(0));
+  private bytes: Uint8Array = new Uint8Array(0);
+  private base = 0;
 
-  const parseAttachments = (end: number): void => {
+  use(bytes: Uint8Array, base: number): void {
+    this.bytes = bytes;
+    this.r = new Reader(bytes);
+    this.base = base;
+  }
+
+  result(): MkvInfo {
+    return { subtitles: finish(this.tracks), audio: this.audio, fonts: this.fonts, clusters: this.clusters, timestampScale: this.scale };
+  }
+
+  parseInfo(end: number): void {
+    const r = this.r;
+    while (r.pos < end) {
+      const id = r.readId();
+      const size = r.readSize();
+      if (size == null) throw new Error("bad info");
+      if (id === ID_TIMESTAMP_SCALE) this.scale = r.uint(size);
+      r.pos += size;
+    }
+  }
+
+  parseTracks(end: number): void {
+    const r = this.r;
+    while (r.pos < end) {
+      const id = r.readId();
+      const size = r.readSize();
+      if (size == null) throw new Error("bad tracks");
+      if (id === ID_TRACK_ENTRY) this.parseTrackEntry(r.pos + size);
+      else r.pos += size;
+    }
+  }
+
+  parseAttachments(end: number): void {
+    const r = this.r;
     while (r.pos < end) {
       const id = r.readId();
       const size = r.readSize();
@@ -313,36 +348,41 @@ export function extractMkvInfo(bytes: Uint8Array): MkvInfo {
         r.pos = fEnd;
         // Keep font attachments only (mime font/* or the common .ttf/.otf/.ttc names).
         if (data && (/^(application\/x-truetype-font|application\/font|font)\b|opentype|truetype/i.test(mime) || /\.(ttf|otf|ttc|otc)$/i.test(name)))
-          fonts.push({ name, mime, data });
+          this.fonts.push({ name, mime, data });
       } else {
         r.pos += size;
       }
     }
-  };
+  }
 
-  const parseBlock = (size: number, clusterTs: number, duration: number | null): void => {
+  private parseBlock(size: number, clusterTs: number, duration: number | null): void {
+    const r = this.r;
+    const bytes = this.bytes;
     const start = r.pos;
     const trackNum = r.readSize(); // block track number is a plain EBML varint
     if (trackNum == null) throw new Error("bad block");
-    const track = tracks.get(trackNum);
-    const view = new DataView(bytes.buffer, bytes.byteOffset);
-    const relTime = view.getInt16(r.pos);
-    const flags = bytes[r.pos + 2]!;
-    r.pos += 3;
-    const payloadLen = size - (r.pos - start);
-    if (track && !(flags & 0x06) && payloadLen > 0) {
-      const raw = utf8.decode(r.bytes(payloadLen)).replace(/\0+$/, "").replace(/\r\n/g, "\n");
-      const text = track.codec.includes("ASS") || track.codec.includes("SSA") ? assText(raw) : track.codec.includes("WEBVTT") ? webvttText(raw) : raw.trim();
-      const startMs = ((clusterTs + relTime) * scale) / 1e6;
-      const durMs = duration != null ? (duration * scale) / 1e6 : 3000;
-      if (text) track.cues.push({ start: Math.max(0, startMs), end: Math.max(0, startMs + durMs), text });
-      if (raw && (track.codec.includes("ASS") || track.codec.includes("SSA")))
-        track.assEvents.push({ start: Math.max(0, startMs), end: Math.max(0, startMs + durMs), payload: raw });
+    const track = this.tracks.get(trackNum);
+    if (track) {
+      const view = new DataView(bytes.buffer, bytes.byteOffset);
+      const relTime = view.getInt16(r.pos);
+      const flags = bytes[r.pos + 2]!;
+      r.pos += 3;
+      const payloadLen = size - (r.pos - start);
+      if (!(flags & 0x06) && payloadLen > 0) {
+        const raw = utf8.decode(r.bytes(payloadLen)).replace(/\0+$/, "").replace(/\r\n/g, "\n");
+        const text = track.codec.includes("ASS") || track.codec.includes("SSA") ? assText(raw) : track.codec.includes("WEBVTT") ? webvttText(raw) : raw.trim();
+        const startMs = ((clusterTs + relTime) * this.scale) / 1e6;
+        const durMs = duration != null ? (duration * this.scale) / 1e6 : 3000;
+        if (text) track.cues.push({ start: Math.max(0, startMs), end: Math.max(0, startMs + durMs), text });
+        if (raw && (track.codec.includes("ASS") || track.codec.includes("SSA")))
+          track.assEvents.push({ start: Math.max(0, startMs), end: Math.max(0, startMs + durMs), payload: raw });
+      }
     }
     r.pos = start + size;
-  };
+  }
 
-  const parseTrackEntry = (end: number): void => {
+  private parseTrackEntry(end: number): void {
+    const r = this.r;
     let num = 0;
     let type = 0;
     let codec = "";
@@ -362,11 +402,13 @@ export function extractMkvInfo(bytes: Uint8Array): MkvInfo {
       r.pos += size;
     }
     r.pos = end;
-    if (type === 0x11 && codec.startsWith("S_TEXT")) tracks.set(num, { codec, label: name, language: lang || "und", cues: [], codecPrivate: priv || undefined, assEvents: [] });
-    else if (type === 0x02) audio.push({ number: num, label: name, language: lang || "und", codec });
-  };
+    if (type === 0x11 && codec.startsWith("S_TEXT")) this.tracks.set(num, { codec, label: name, language: lang || "und", cues: [], codecPrivate: priv || undefined, assEvents: [] });
+    else if (type === 0x02) this.audio.push({ number: num, label: name, language: lang || "und", codec });
+  }
 
-  const parseCluster = (end: number | null, selfOffset: number): void => {
+  /** Cluster body from r.pos to `end` (null = unknown size); `selfOffset` is in slice coordinates. */
+  parseCluster(end: number | null, selfOffset: number): void {
+    const r = this.r;
     let clusterTs = 0;
     let indexed = false;
     while (r.pos < (end ?? r.length)) {
@@ -382,10 +424,10 @@ export function extractMkvInfo(bytes: Uint8Array): MkvInfo {
         r.pos += size;
         if (!indexed) {
           indexed = true;
-          clusters.push({ offset: selfOffset, timeMs: (clusterTs * scale) / 1e6 });
+          this.clusters.push({ offset: this.base + selfOffset, timeMs: (clusterTs * this.scale) / 1e6 });
         }
       } else if (id === ID_SIMPLE_BLOCK) {
-        parseBlock(size, clusterTs, null);
+        this.parseBlock(size, clusterTs, null);
       } else if (id === ID_BLOCK_GROUP) {
         const gEnd = r.pos + size;
         let blockAt = -1;
@@ -404,15 +446,22 @@ export function extractMkvInfo(bytes: Uint8Array): MkvInfo {
         if (blockAt >= 0) {
           const save = r.pos;
           r.pos = blockAt;
-          parseBlock(blockSize, clusterTs, duration);
+          this.parseBlock(blockSize, clusterTs, duration);
           r.pos = save;
         }
       } else {
         r.pos += size;
       }
     }
-  };
+  }
+}
 
+export function extractMkvInfo(bytes: Uint8Array): MkvInfo {
+  const empty: MkvInfo = { subtitles: [], audio: [], fonts: [], clusters: [], timestampScale: 1_000_000 };
+  if (bytes.length < 8 || bytes[0] !== 0x1a || bytes[1] !== 0x45 || bytes[2] !== 0xdf || bytes[3] !== 0xa3) return empty;
+  const w = new MkvWalker();
+  w.use(bytes, 0);
+  const r = w.r;
   try {
     while (r.pos < r.length) {
       const id = r.readId();
@@ -426,33 +475,12 @@ export function extractMkvInfo(bytes: Uint8Array): MkvInfo {
           const clStart = r.pos;
           const cid = r.readId();
           const csize = r.readSize();
-          if (cid === ID_INFO && csize != null) {
-            const iEnd = r.pos + csize;
-            while (r.pos < iEnd) {
-              const iid = r.readId();
-              const isize = r.readSize();
-              if (isize == null) throw new Error("bad info");
-              if (iid === ID_TIMESTAMP_SCALE) scale = r.uint(isize);
-              r.pos += isize;
-            }
-          } else if (cid === ID_TRACKS && csize != null) {
-            const tEnd = r.pos + csize;
-            while (r.pos < tEnd) {
-              const tid = r.readId();
-              const tsize = r.readSize();
-              if (tsize == null) throw new Error("bad tracks");
-              if (tid === ID_TRACK_ENTRY) parseTrackEntry(r.pos + tsize);
-              else r.pos += tsize;
-            }
-          } else if (cid === ID_ATTACHMENTS && csize != null) {
-            parseAttachments(r.pos + csize);
-          } else if (cid === ID_CLUSTER) {
-            parseCluster(csize == null ? null : r.pos + csize, clStart);
-          } else if (csize != null) {
-            r.pos += csize;
-          } else {
-            return { subtitles: finish(tracks), audio, fonts, clusters, timestampScale: scale }; // unknown-size non-cluster: bail with what we have
-          }
+          if (cid === ID_INFO && csize != null) w.parseInfo(r.pos + csize);
+          else if (cid === ID_TRACKS && csize != null) w.parseTracks(r.pos + csize);
+          else if (cid === ID_ATTACHMENTS && csize != null) w.parseAttachments(r.pos + csize);
+          else if (cid === ID_CLUSTER) w.parseCluster(csize == null ? null : r.pos + csize, clStart);
+          else if (csize != null) r.pos += csize;
+          else return w.result(); // unknown-size non-cluster: bail with what we have
         }
       } else if (size != null) {
         r.pos += size;
@@ -463,7 +491,201 @@ export function extractMkvInfo(bytes: Uint8Array): MkvInfo {
   } catch {
     // Truncated or malformed tail: keep whatever cues were collected.
   }
-  return { subtitles: finish(tracks), audio, fonts, clusters, timestampScale: scale };
+  return w.result();
+}
+
+// --- Blob (disk-backed File) readers: never load the whole file -----------------
+
+const ID_SEEK_HEAD = 0x114d9b74;
+const ID_SEEK = 0x4dbb;
+const ID_SEEK_ID = 0x53ab;
+const ID_SEEK_POSITION = 0x53ac;
+const ID_CUES = 0x1c53bb6b;
+const ID_CUE_POINT = 0xbb;
+const ID_CUE_TIME = 0xb3;
+const ID_CUE_TRACK_POSITIONS = 0xb7;
+const ID_CUE_CLUSTER_POSITION = 0xf1;
+
+async function readAt(blob: Blob, start: number, end: number): Promise<Uint8Array> {
+  return new Uint8Array(await blob.slice(start, Math.min(end, blob.size)).arrayBuffer());
+}
+
+/** An element header (id + size) read from the Blob at `pos`, or null past the end. */
+async function headerAt(blob: Blob, pos: number): Promise<{ id: number; size: number | null; body: number } | null> {
+  if (pos >= blob.size) return null;
+  const r = new Reader(await readAt(blob, pos, pos + 12));
+  const id = r.readId();
+  const size = r.readSize();
+  return { id, size, body: pos + r.pos };
+}
+
+/** Offset of the Segment's data (after its header), or null if this isn't Matroska. */
+async function segmentStart(blob: Blob): Promise<{ start: number; end: number } | null> {
+  const head = await readAt(blob, 0, 64);
+  if (head.length < 8 || head[0] !== 0x1a || head[1] !== 0x45 || head[2] !== 0xdf || head[3] !== 0xa3) return null;
+  let pos = 0;
+  try {
+    for (;;) {
+      const h = await headerAt(blob, pos);
+      if (!h) return null;
+      if (h.id === ID_SEGMENT) return { start: h.body, end: h.size == null ? blob.size : Math.min(blob.size, h.body + h.size) };
+      if (h.size == null) return null;
+      pos = h.body + h.size;
+    }
+  } catch {
+    return null;
+  }
+}
+
+/** Cue points (time + cluster offset), one per cluster, sorted by time. */
+function parseCues(bytes: Uint8Array, segStart: number, scale: number): MkvClusterRef[] {
+  const r = new Reader(bytes);
+  const byOffset = new Map<number, number>();
+  try {
+    while (r.pos < r.length) {
+      const id = r.readId();
+      const size = r.readSize();
+      if (size == null) break;
+      if (id !== ID_CUE_POINT) {
+        r.pos += size;
+        continue;
+      }
+      const end = r.pos + size;
+      let time = -1;
+      const offsets: number[] = [];
+      while (r.pos < end) {
+        const cid = r.readId();
+        const csize = r.readSize();
+        if (csize == null) throw new Error("bad cue");
+        if (cid === ID_CUE_TIME) time = r.uint(csize);
+        else if (cid === ID_CUE_TRACK_POSITIONS) {
+          const tEnd = r.pos + csize;
+          while (r.pos < tEnd) {
+            const tid = r.readId();
+            const tsize = r.readSize();
+            if (tsize == null) throw new Error("bad cue position");
+            if (tid === ID_CUE_CLUSTER_POSITION) offsets.push(segStart + r.uint(tsize));
+            r.pos += tsize;
+          }
+          r.pos = tEnd;
+          continue;
+        }
+        r.pos += csize;
+      }
+      r.pos = end;
+      if (time < 0) continue;
+      const ms = (time * scale) / 1e6;
+      for (const o of offsets) if (!byOffset.has(o) || byOffset.get(o)! > ms) byOffset.set(o, ms);
+    }
+  } catch {
+    /* keep what parsed */
+  }
+  return [...byOffset].map(([offset, timeMs]) => ({ offset, timeMs })).sort((a, b) => a.timeMs - b.timeMs || a.offset - b.offset);
+}
+
+/**
+ * The fast part of extractMkvInfo, read from a Blob: track list and timestamp scale, plus a
+ * sparse cluster index from the Cues when the file has them. It reads only the elements before
+ * the first Cluster (and the Cues), so it takes milliseconds on a multi-GB file. No subtitles or
+ * fonts: those need extractMkvInfoFromBlob. Null when the Blob isn't Matroska.
+ */
+export async function readMkvHeader(blob: Blob): Promise<MkvInfo | null> {
+  const seg = await segmentStart(blob);
+  if (!seg) return null;
+  const w = new MkvWalker();
+  let cuesAt = -1;
+  let pos = seg.start;
+  try {
+    while (pos < seg.end) {
+      const h = await headerAt(blob, pos);
+      if (!h || h.id === ID_CLUSTER || h.size == null) break;
+      const end = h.body + h.size;
+      if (h.id === ID_INFO || h.id === ID_TRACKS || h.id === ID_SEEK_HEAD) {
+        w.use(await readAt(blob, h.body, end), h.body);
+        if (h.id === ID_INFO) w.parseInfo(h.size);
+        else if (h.id === ID_TRACKS) w.parseTracks(h.size);
+        else cuesAt = seekTarget(w.r, h.size, ID_CUES, seg.start) ?? cuesAt;
+      } else if (h.id === ID_CUES) cuesAt = pos;
+      pos = end;
+    }
+    if (cuesAt >= 0) {
+      const h = await headerAt(blob, cuesAt);
+      if (h && h.id === ID_CUES && h.size != null) {
+        const cues = parseCues(await readAt(blob, h.body, h.body + h.size), seg.start, w.scale);
+        // Trust the index only if its first entry really points at a Cluster.
+        const first = cues[0] && (await headerAt(blob, cues[0].offset));
+        if (first && first.id === ID_CLUSTER) w.clusters.push(...cues);
+      }
+    }
+  } catch {
+    /* malformed header: return what parsed */
+  }
+  return w.result();
+}
+
+/** Position of the element `target` named in a SeekHead body, as a file offset. */
+function seekTarget(r: Reader, end: number, target: number, segStart: number): number | null {
+  let found: number | null = null;
+  while (r.pos < end) {
+    const id = r.readId();
+    const size = r.readSize();
+    if (size == null) break;
+    if (id !== ID_SEEK) {
+      r.pos += size;
+      continue;
+    }
+    const sEnd = r.pos + size;
+    let sid = 0;
+    let spos = -1;
+    while (r.pos < sEnd) {
+      const cid = r.readId();
+      const csize = r.readSize();
+      if (csize == null) break;
+      if (cid === ID_SEEK_ID) sid = r.uint(csize);
+      else if (cid === ID_SEEK_POSITION) spos = r.uint(csize);
+      r.pos += csize;
+    }
+    r.pos = sEnd;
+    if (sid === target && spos >= 0) found = segStart + spos;
+  }
+  return found;
+}
+
+/**
+ * extractMkvInfo for a Blob, reading it one top-level element at a time instead of copying the
+ * whole file into memory first; awaits between reads keep the page responsive while it runs.
+ */
+export async function extractMkvInfoFromBlob(blob: Blob, signal?: { aborted: boolean }): Promise<MkvInfo> {
+  const empty: MkvInfo = { subtitles: [], audio: [], fonts: [], clusters: [], timestampScale: 1_000_000 };
+  const seg = await segmentStart(blob);
+  if (!seg) return empty;
+  const w = new MkvWalker();
+  let pos = seg.start;
+  try {
+    while (pos < seg.end && !signal?.aborted) {
+      const h = await headerAt(blob, pos);
+      if (!h) break;
+      if (h.size == null) {
+        // Unknown-size element (live-written files): fall back to the in-memory walk.
+        if (h.id === ID_CLUSTER) return extractMkvInfo(new Uint8Array(await blob.arrayBuffer()));
+        break;
+      }
+      const end = h.body + h.size;
+      if (h.id === ID_INFO || h.id === ID_TRACKS || h.id === ID_ATTACHMENTS || h.id === ID_CLUSTER) {
+        w.use(await readAt(blob, pos, end), pos);
+        w.r.pos = h.body - pos;
+        const bodyEnd = end - pos;
+        if (h.id === ID_INFO) w.parseInfo(bodyEnd);
+        else if (h.id === ID_TRACKS) w.parseTracks(bodyEnd);
+        else if (h.id === ID_ATTACHMENTS) w.parseAttachments(bodyEnd);
+        else w.parseCluster(bodyEnd, 0);
+      }
+      pos = end;
+    }
+  } catch {
+    // Truncated or malformed tail: keep whatever was collected.
+  }
+  return w.result();
 }
 
 function finish(tracks: Map<number, TrackInfo>): MkvSubtitleTrack[] {
@@ -648,7 +870,7 @@ export function* readAudioPackets(bytes: Uint8Array, trackNumber: number, fromMs
 }
 
 /** Streaming variant of readAudioPackets: reads the file ONE CLUSTER AT A TIME from a Blob
- * (using the cluster index in `info`) instead of holding the whole file in memory. Yields the
+ * (starting from the cluster index in `info`, then by cluster sizes) instead of holding the whole file in memory. Yields the
  * same packets; each block's `data` is a view into that cluster's buffer, which stays alive only
  * until the generator advances to the next cluster. Used for AC-3/E-AC-3 playback so a multi-GB
  * file isn't kept in RAM. */
@@ -659,25 +881,34 @@ export async function* readAudioPacketsFromBlob(blob: Blob, trackNumber: number,
     if (info.clusters[i]!.timeMs <= fromMs) startIdx = i;
     else break;
   }
-  for (let ci = startIdx; ci < info.clusters.length; ci++) {
-    const begin = info.clusters[ci]!.offset;
-    const end = ci + 1 < info.clusters.length ? info.clusters[ci + 1]!.offset : blob.size;
+  // Walk cluster after cluster by their own sizes, so a sparse index (Cues) works too.
+  let pos = info.clusters[startIdx]!.offset;
+  while (pos < blob.size) {
+    let h: Awaited<ReturnType<typeof headerAt>>;
+    try {
+      h = await headerAt(blob, pos);
+    } catch {
+      return;
+    }
+    if (!h) return;
+    if (h.id !== ID_CLUSTER) {
+      if (h.size == null) return;
+      pos = h.body + h.size;
+      continue;
+    }
+    // Unknown size: read up to the next indexed cluster (or a bounded window).
+    const next = info.clusters.find((c) => c.offset > pos)?.offset;
+    const end = h.size != null ? h.body + h.size : (next ?? Math.min(blob.size, pos + 64 * 1024 * 1024));
     let buf: Uint8Array;
     try {
-      buf = new Uint8Array(await blob.slice(begin, end).arrayBuffer());
+      buf = await readAt(blob, pos, end);
     } catch {
       return;
     }
     const r = new Reader(buf);
-    let clusterEnd: number;
-    try {
-      const id = r.readId();
-      const size = r.readSize();
-      if (id !== ID_CLUSTER) continue;
-      clusterEnd = size == null ? buf.length : Math.min(buf.length, r.pos + size);
-    } catch {
-      continue;
-    }
+    r.pos = h.body - pos;
+    pos = end;
+    const clusterEnd = buf.length;
     let clusterTs = 0;
     try {
       while (r.pos < clusterEnd) {

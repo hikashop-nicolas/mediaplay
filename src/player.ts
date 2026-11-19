@@ -1,4 +1,4 @@
-import { decodeSubtitleBytes, extractMkvInfo, subtitleFileToVtt, type MkvAudioTrack, type MkvInfo } from "./mkv";
+import { decodeSubtitleBytes, extractMkvInfo, extractMkvInfoFromBlob, readMkvHeader, subtitleFileToVtt, type MkvAudioTrack, type MkvInfo } from "./mkv";
 import type { DirectAudioInfo } from "./synced-audio";
 import { strings, type MediaStrings } from "./i18n";
 import type { SyncedAudioHandle } from "./synced-audio";
@@ -1316,11 +1316,39 @@ class MediaPlayer implements MediaPlayerHandle {
           if (audioBtn) audioBtn.hidden = audioTracks.length < 2; // only worth a button with a choice
         };
 
+        // Decoded audio needs only the track list, which sits at the head of the file: start it
+        // from there at once, before the full scan (subtitles, fonts) has read the whole file.
+        let audioChecked = false;
+        const useTracks = (info: MkvInfo) => {
+          mkvInfo = info;
+          audioTracks = info.audio;
+          rebuildMenu();
+          if (audioChecked) return;
+          audioChecked = true;
+          // Video plays but the audio codec has no browser decoder: the element stays
+          // silent with no error event. For AC-3/E-AC-3/DTS/TrueHD we decode it ourselves
+          // (libav) and play it in sync with the muted video; other codecs we just report.
+          const activeCodec = audioTracks[activeAudio]?.codec ?? "";
+          if (activeCodec && browserLacksAudioCodec(activeCodec, m)) {
+            if (/^A_(E?AC3|DTS|TRUEHD|MLP)$/i.test(activeCodec)) void this.startDecodedAudio(m, activeAudio, showToast, directFor(activeAudio));
+            else showToast(S.mediaAudioUnsupported);
+          }
+        };
         window.setTimeout(async () => {
           if (!this.wrap) return;
           try {
-            const info = extractMkvInfo(await this.buffer());
-            mkvInfo = info;
+            const blob = this.eagerBytes ? null : srcBlob;
+            if (blob) {
+              const head = await readMkvHeader(blob);
+              if (!head || !this.wrap) return; // not Matroska
+              useTracks(head);
+            }
+            const stop = { aborted: false };
+            this.teardown.push(() => (stop.aborted = true));
+            const info = blob ? await extractMkvInfoFromBlob(blob, stop) : extractMkvInfo(await this.buffer());
+            if (!this.wrap || stop.aborted) return;
+            // Keep the head's Cues index if the scan found no clusters (it never does less).
+            if (!info.clusters.length && mkvInfo) info.clusters = mkvInfo.clusters;
             // Hand the file's embedded fonts to libass BEFORE selecting a track, so the
             // first styled render already resolves the intended (incl. CJK) faces.
             for (const f of info.fonts) {
@@ -1332,17 +1360,7 @@ class MediaPlayer implements MediaPlayerHandle {
             // or auto-select the file's own subtitle tracks; keep fonts and audio though.
             if (!this.opts.embedded)
               info.subtitles.forEach((s, i) => addSubTrack({ label: s.label || s.language, lang: s.language, vtt: s.vtt, assDoc: s.assDoc }, i === 0));
-            audioTracks = info.audio;
-            rebuildMenu();
-            // Video plays but the audio codec has no browser decoder: the element stays
-            // silent with no error event. For AC-3/E-AC-3 we can decode it ourselves
-            // (libav) and play it in sync with the muted video; other codecs (DTS,
-            // TrueHD) aren't in the decoder, so we just tell the user.
-            const activeCodec = audioTracks[activeAudio]?.codec ?? "";
-            if (activeCodec && browserLacksAudioCodec(activeCodec, m)) {
-              if (/^A_(E?AC3|DTS|TRUEHD|MLP)$/i.test(activeCodec)) void this.startDecodedAudio(m, activeAudio, showToast, directFor(activeAudio));
-              else showToast(S.mediaAudioUnsupported);
-            }
+            useTracks(info);
           } catch {
             /* track info is best-effort */
           }

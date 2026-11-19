@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { assFileToVtt, decodeSubtitleBytes, extractMkvInfo, extractMkvSubtitles, readAudioPackets, readAudioPacketsFromBlob, srtToVtt } from "./mkv";
+import {
+  assFileToVtt,
+  decodeSubtitleBytes,
+  extractMkvInfo,
+  extractMkvInfoFromBlob,
+  extractMkvSubtitles,
+  readAudioPackets,
+  readAudioPacketsFromBlob,
+  readMkvHeader,
+  srtToVtt,
+} from "./mkv";
 
 // Hand-built EBML fixtures: enough Matroska structure for the extractor
 // (EBML header, Segment > Info/Tracks/Cluster with subtitle blocks).
@@ -336,5 +346,58 @@ describe("readAudioPackets", () => {
     const got = Array.from(readAudioPackets(bytes, 2, 9000, info));
     expect(got.map((p) => Array.from(p.data))).toEqual([[2]]);
     expect(got[0]!.tsMs).toBe(10005);
+  });
+});
+
+describe("reading a Blob without loading the whole file", () => {
+  const audioEntry = el(0xae, [...el(0xd7, [2]), ...el(0x83, [0x02]), ...el(0x86, Array.from(te.encode("A_DTS")))]);
+  const subEntry = subtitleTrackEntry(3, "S_TEXT/UTF8", "English", "eng");
+  const blk = (track: number, rel: number, data: number[]) => [0x80 | track, 0, rel, 0, ...data];
+  const c1 = el(0x1f43b675, [...el(0xe7, uintPayload(0)), ...el(0xa3, blk(2, 0, [1])), ...el(0xa0, [...el(0xa1, simpleBlock(3, 5, "hi")), ...el(0x9b, uintPayload(900))])]);
+  const c2 = el(0x1f43b675, [...el(0xe7, uintPayload(5000)), ...el(0xa3, blk(2, 0, [2]))]);
+  const c3 = el(0x1f43b675, [...el(0xe7, uintPayload(10000)), ...el(0xa3, blk(2, 0, [3]))]);
+  const info = el(0x1549a966, el(0x2ad7b1, uintPayload(1_000_000)));
+  const tracks = el(0x1654ae6b, [...audioEntry, ...subEntry]);
+  const u32 = (n: number) => [(n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff];
+  // A SeekHead naming the Cues at the end (or a Void as long), the Cues indexing only the first cluster.
+  const build = (withCues: boolean): Uint8Array => {
+    const seekLen = el(0x114d9b74, el(0x4dbb, [...el(0x53ab, [0x1c, 0x53, 0xbb, 0x6b]), ...el(0x53ac, u32(0))])).length;
+    const c1At = seekLen + info.length + tracks.length;
+    const cuesAt = c1At + c1.length + c2.length + c3.length;
+    const seek = el(0x114d9b74, el(0x4dbb, [...el(0x53ab, [0x1c, 0x53, 0xbb, 0x6b]), ...el(0x53ac, u32(cuesAt))]));
+    const cues = el(0x1c53bb6b, el(0xbb, [...el(0xb3, uintPayload(0)), ...el(0xb7, [...el(0xf7, [2]), ...el(0xf1, u32(c1At))])]));
+    const body = [...(withCues ? seek : el(0xec, new Array(seekLen - 2).fill(0))), ...info, ...tracks, ...c1, ...c2, ...c3, ...(withCues ? cues : [])];
+    return new Uint8Array([...el(0x1a45dfa3, []), ...el(0x18538067, body)]);
+  };
+
+  it("finds the tracks and a Cues index from the head of the file", async () => {
+    const head = await readMkvHeader(new Blob([build(true) as BlobPart]));
+    expect(head!.audio.map((a) => a.codec)).toEqual(["A_DTS"]);
+    expect(head!.subtitles).toEqual([]); // those need the full scan
+    expect(head!.clusters).toEqual([{ offset: extractMkvInfo(build(true)).clusters[0]!.offset, timeMs: 0 }]);
+    expect(await readMkvHeader(new Blob([new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8])]))).toBeNull();
+  });
+
+  it("walks on from a sparse index to every later cluster", async () => {
+    const bytes = build(true);
+    const blob = new Blob([bytes as BlobPart]);
+    const head = (await readMkvHeader(blob))!;
+    const read = async (from: number) => {
+      const out: number[] = [];
+      for await (const p of readAudioPacketsFromBlob(blob, 2, from, head)) out.push(p.data[0]!);
+      return out;
+    };
+    expect(await read(0)).toEqual([1, 2, 3]);
+    expect(await read(9000)).toEqual([3]); // starts at the indexed cluster, skips what is before
+  });
+
+  it("scans a Blob to the same result as the in-memory walk", async () => {
+    for (const withCues of [true, false]) {
+      const bytes = build(withCues);
+      expect(await extractMkvInfoFromBlob(new Blob([bytes as BlobPart]))).toEqual(extractMkvInfo(bytes));
+    }
+    const full = await extractMkvInfoFromBlob(new Blob([build(false) as BlobPart]));
+    expect(full.subtitles[0]!.vtt).toContain("hi");
+    expect(full.clusters.map((c) => c.timeMs)).toEqual([0, 5000, 10000]);
   });
 });
