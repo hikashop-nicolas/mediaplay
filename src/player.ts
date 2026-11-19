@@ -346,6 +346,7 @@ class MediaPlayer implements MediaPlayerHandle {
   // Host fonts for libass: key -> blob URL, and the hook that restarts a running render.
   private hostFonts = new Map<string, string>();
   private onHostFonts: (() => void) | null = null;
+  private fallbackWorkerUrl: string | null = null;
   private onDocKey: ((e: KeyboardEvent) => void) | null = null;
   private subUrls: string[] = [];
   private teardown: (() => void)[] = [];
@@ -1040,9 +1041,11 @@ class MediaPlayer implements MediaPlayerHandle {
             octopus = new SubtitlesOctopus({
               video: m as HTMLVideoElement,
               subContent: entry.assDoc!,
-              workerUrl: this.workerUrl,
+              // With font files, the fallback font joins them under a known name (see
+              // fallbackWorker), so a family nobody supplied still draws in it.
+              workerUrl: libassFonts().length ? this.fallbackWorker() : this.workerUrl,
               fallbackFont: this.fontUrl,
-              fonts: libassFonts().length ? libassFonts() : undefined,
+              fonts: libassFonts().length ? [this.fontUrl, ...libassFonts()] : undefined,
               onError: () => {
                 dropOctopus();
                 showVttFallback(i);
@@ -1722,6 +1725,39 @@ class MediaPlayer implements MediaPlayerHandle {
     this.applyLiveSubtitle?.(content, filename);
   }
 
+  // libass asks fontconfig for a fallback when a family is missing, and fontconfig picks
+  // among the font files it was handed (the default font is only a last resort and is
+  // never indexed). That made an unsupplied Arial draw in, say, Klee One. This worker
+  // wrapper rewrites the worker's fonts.conf so the default font, passed first in
+  // `fonts`, gets a family name that sans-serif prefers; a glyph it lacks (CJK) still
+  // falls through to a supplied font that has it.
+  private fallbackWorker(): string {
+    if (this.fallbackWorkerUrl) return this.fallbackWorkerUrl;
+    const xml = (v: string) => v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const file = `/fonts/font0-${this.fontUrl.split("/").pop() ?? ""}`;
+    const conf = `<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+<fontconfig>
+<dir>/fonts</dir>
+<match target="pattern"><test qual="any" name="family"><string>mono</string></test><edit name="family" mode="assign" binding="same"><string>monospace</string></edit></match>
+<match target="pattern"><test qual="any" name="family"><string>sans serif</string></test><edit name="family" mode="assign" binding="same"><string>sans-serif</string></edit></match>
+<match target="pattern"><test qual="any" name="family"><string>sans</string></test><edit name="family" mode="assign" binding="same"><string>sans-serif</string></edit></match>
+<match target="scan"><test name="file"><string>${xml(file)}</string></test><edit name="family" mode="prepend" binding="strong"><string>mediaplay fallback</string></edit></match>
+<alias binding="strong"><family>sans-serif</family><prefer><family>mediaplay fallback</family></prefer></alias>
+<cachedir>/fontconfig</cachedir>
+</fontconfig>`;
+    const worker = new URL(this.workerUrl, document.baseURI).href; // a blob worker resolves nothing relative
+    // Emscripten runs preRun callbacks last-pushed first: ours, pushed before the worker's own
+    // (which writes the stock fonts.conf), runs after them. A failure keeps the stock file.
+    const src = `self.Module = {
+  locateFile: (p) => new URL(p, ${JSON.stringify(worker)}).href,
+  preRun: [() => { try { Module.FS.writeFile("/assets/fonts.conf", ${JSON.stringify(conf)}); } catch (e) {} }],
+};
+importScripts(${JSON.stringify(worker)});`;
+    this.fallbackWorkerUrl = URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
+    return this.fallbackWorkerUrl;
+  }
+
   setSubtitleFonts(fonts: readonly SubtitleFont[]): void {
     const next = new Map<string, SubtitleFont>();
     for (const f of fonts) if (!next.has(f.name)) next.set(f.name, f);
@@ -1751,6 +1787,8 @@ class MediaPlayer implements MediaPlayerHandle {
     this.onHostFonts = null;
     for (const u of this.hostFonts.values()) URL.revokeObjectURL(u);
     this.hostFonts.clear();
+    if (this.fallbackWorkerUrl) URL.revokeObjectURL(this.fallbackWorkerUrl);
+    this.fallbackWorkerUrl = null;
     this.media = null;
     for (const fn of this.teardown) fn();
     this.teardown = [];
