@@ -69,6 +69,15 @@ export interface LibassAssets {
   fonts?: string[];
 }
 
+/** A font file handed to libass at runtime (see MediaPlayerHandle.setSubtitleFonts). */
+export interface SubtitleFont {
+  /** Stable key for this file (e.g. "Lobster 700 italic"); unchanged keys are not reloaded. */
+  name: string;
+  /** Plain TTF/OTF/TTC bytes; libass matches the family names inside the file. */
+  data: Uint8Array;
+  mime?: string;
+}
+
 export interface MediaPlayerOptions {
   /** Called with a human-readable message when playback fails irrecoverably. */
   onError?: (message: string) => void;
@@ -119,6 +128,9 @@ export interface MediaPlayerHandle {
   /** Show subtitles from raw text (SRT/VTT/ASS/SSA by filename), replacing any previously
    * set with this method. For live preview of an edited document; video sources only. */
   setSubtitleText(content: string, filename: string): void;
+  /** Font files for styled (libass) subtitles, replacing the previous set. Fonts embedded in
+   * the media file still come first. A running render restarts only when the set changes. */
+  setSubtitleFonts(fonts: readonly SubtitleFont[]): void;
   /** Move keyboard focus into the player. */
   focus(): void;
   /** Tear down: stop playback, revoke blob URLs, remove listeners and DOM. */
@@ -331,6 +343,9 @@ class MediaPlayer implements MediaPlayerHandle {
   private eagerBytes: Uint8Array | null = null; // set only when the caller passed bytes directly
   private media: HTMLMediaElement | null = null;
   private applyLiveSubtitle: ((content: string, filename: string) => void) | null = null;
+  // Host fonts for libass: key -> blob URL, and the hook that restarts a running render.
+  private hostFonts = new Map<string, string>();
+  private onHostFonts: (() => void) | null = null;
   private onDocKey: ((e: KeyboardEvent) => void) | null = null;
   private subUrls: string[] = [];
   private teardown: (() => void)[] = [];
@@ -942,7 +957,8 @@ class MediaPlayer implements MediaPlayerHandle {
         let activeAudio = 0;
         // Fonts handed to libass so styled subs use the intended faces (fonts embedded in
         // the file + any the host supplied); populated once track info is parsed, below.
-        let libassFonts: string[] = [...(this.opts.libass?.fonts ?? [])];
+        const fileFonts: string[] = [...(this.opts.libass?.fonts ?? [])];
+        const libassFonts = (): string[] => [...fileFonts, ...this.hostFonts.values()];
         let octopus: { dispose(): void; resize?: () => void } | null = null;
         let octopusFor = -1;
         const dropOctopus = () => {
@@ -1026,7 +1042,7 @@ class MediaPlayer implements MediaPlayerHandle {
               subContent: entry.assDoc!,
               workerUrl: this.workerUrl,
               fallbackFont: this.fontUrl,
-              fonts: libassFonts.length ? libassFonts : undefined,
+              fonts: libassFonts().length ? libassFonts() : undefined,
               onError: () => {
                 dropOctopus();
                 showVttFallback(i);
@@ -1290,6 +1306,15 @@ class MediaPlayer implements MediaPlayerHandle {
           }
         };
 
+        // New host fonts: libass only reads its font dir at start, so restart a live render.
+        this.onHostFonts = () => {
+          if (octopus && activeSub >= 0) {
+            const i = activeSub;
+            dropOctopus();
+            setSub(i);
+          }
+        };
+
         const switchAudio = async (i: number) => {
           closePops();
           if (i === activeAudio) return;
@@ -1419,7 +1444,7 @@ class MediaPlayer implements MediaPlayerHandle {
             for (const f of info.fonts) {
               const url = URL.createObjectURL(new Blob([f.data as BlobPart], { type: f.mime || "font/otf" }));
               this.subUrls.push(url); // revoked on dispose alongside the VTT blobs
-              libassFonts.push(url);
+              fileFonts.push(url);
             }
             // Embedded hosts (subtitle editor) drive subtitles themselves, so don't add
             // or auto-select the file's own subtitle tracks; keep fonts and audio though.
@@ -1697,6 +1722,23 @@ class MediaPlayer implements MediaPlayerHandle {
     this.applyLiveSubtitle?.(content, filename);
   }
 
+  setSubtitleFonts(fonts: readonly SubtitleFont[]): void {
+    const next = new Map<string, SubtitleFont>();
+    for (const f of fonts) if (!next.has(f.name)) next.set(f.name, f);
+    const same = next.size === this.hostFonts.size && [...next.keys()].every((k) => this.hostFonts.has(k));
+    if (same) return;
+    for (const [k, url] of this.hostFonts) {
+      if (next.has(k)) continue;
+      URL.revokeObjectURL(url);
+      this.hostFonts.delete(k);
+    }
+    for (const [k, f] of next) {
+      if (this.hostFonts.has(k)) continue;
+      this.hostFonts.set(k, URL.createObjectURL(new Blob([f.data as BlobPart], { type: f.mime || "font/ttf" })));
+    }
+    this.onHostFonts?.();
+  }
+
   focus(): void {
     this.wrap?.focus?.();
   }
@@ -1706,6 +1748,9 @@ class MediaPlayer implements MediaPlayerHandle {
     this.decodedAudio = null;
     this.refreshControls = null;
     this.applyLiveSubtitle = null;
+    this.onHostFonts = null;
+    for (const u of this.hostFonts.values()) URL.revokeObjectURL(u);
+    this.hostFonts.clear();
     this.media = null;
     for (const fn of this.teardown) fn();
     this.teardown = [];

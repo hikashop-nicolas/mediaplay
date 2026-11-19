@@ -5,7 +5,7 @@
 // than the entry that is playing. This file owns the queue and its controls; everything about
 // playing one file stays in player.ts.
 
-import { createMediaPlayer as createSingle, type MediaPlayerHandle, type MediaPlayerOptions, type MediaSource, type PlayerChrome } from "./player";
+import { createMediaPlayer as createSingle, type MediaPlayerHandle, type MediaPlayerOptions, type MediaSource, type PlayerChrome, type SubtitleFont } from "./player";
 import { strings, type MediaStrings } from "./i18n";
 import { PlayQueue, type RepeatMode } from "./queue";
 
@@ -169,6 +169,7 @@ class PlaylistPlayer implements PlaylistHandle {
   private entries: QueueEntry[];
   private readonly queue: PlayQueue;
   private child: MediaPlayerHandle | null = null;
+  private subFonts: SubtitleFont[] = [];
   private media: HTMLMediaElement | null = null;
   /** Bumped on every change of entry, so a load that comes back late knows it was overtaken. */
   private turn = 0;
@@ -280,6 +281,10 @@ class PlaylistPlayer implements PlaylistHandle {
   setSubtitleText(content: string, filename: string): void {
     this.child?.setSubtitleText(content, filename);
   }
+  setSubtitleFonts(fonts: readonly SubtitleFont[]): void {
+    this.subFonts = [...fonts];
+    this.child?.setSubtitleFonts(fonts);
+  }
   focus(): void {
     this.child?.focus();
   }
@@ -372,6 +377,7 @@ class PlaylistPlayer implements PlaylistHandle {
       ...this.childOptions(turn),
       host: this.host,
     });
+    if (this.subFonts.length) this.child.setSubtitleFonts(this.subFonts);
     this.opts.onTrackChange?.(index, entry);
     if (source.blob) void this.readTags(index, source.blob, turn);
   }

@@ -155,7 +155,10 @@ resolved against `document.baseURI`. Without these assets, ASS tracks fall back 
 plain-text WebVTT rendering; everything else works. See
 `scripts/copy-octopus-assets.mjs` for the copy step the demo uses. Fonts embedded in
 the media file are extracted and handed to libass automatically; extra host fonts can
-be passed via `libass.fonts` (URLs).
+be passed via `libass.fonts` (URLs), or as bytes at any time with
+`handle.setSubtitleFonts([{ name, data }])` (a subtitle editor hands over the fonts its
+styles use; libass reads its fonts only at start, so a running render restarts when the
+set changes).
 
 ## Dolby decoder assets (libav)
 
@@ -197,7 +200,7 @@ never at all. Without these assets, ALAC files fail to open on non-Safari browse
   - `source: { blob?: Blob; bytes?: Uint8Array; mime?: string; filename?: string }` — pass a
     `blob` (a `File`, streamed from disk) or `bytes` (already in memory); one or the other.
   - `options: { onError?; strings?; libass?: { workerUrl?, fontUrl?, fonts? }; libav?: { base? }; embedded? }`
-  - `handle: { getMediaElement(); setSubtitleText(content, filename); getBytes(); focus(); destroy() }`
+  - `handle: { getMediaElement(); setSubtitleText(content, filename); setSubtitleFonts(fonts); getBytes(); focus(); destroy() }`
 - `setLocale(code)` / `strings(override?)` — built-in i18n (English, French, Japanese, Spanish, German, Portuguese, Russian and Simplified Chinese);
   a host with its own translations passes `options.strings` to override individual labels.
 - Subtitle helpers, usable headlessly: `extractMkvInfo`, `extractMkvSubtitles`,

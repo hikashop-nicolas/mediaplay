@@ -14,6 +14,7 @@ export {
   type MediaPlayerHandle,
   type PlayerChrome,
   type LibassAssets,
+  type SubtitleFont,
 } from "./player";
 export { createMediaPlayer, type QueueEntry, type PlaylistOptions, type PlaylistHandle } from "./playlist-player";
 export { PlayQueue, type RepeatMode } from "./queue";
