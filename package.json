@@ -36,7 +36,7 @@
     "mediabunny": "github:hikashop-nicolas/mediabunny#3ccd321"
   },
   "devDependencies": {
-    "cypress": "^15.0.0",
+    "cypress": "^15.21.2",
     "start-server-and-test": "^2.0.0",
     "tsgo": "npm:typescript@^7.0.2",
     "typescript": "^6.0.3",
